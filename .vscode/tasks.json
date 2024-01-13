@@ -10,7 +10,27 @@
             "problemMatcher": [],
             "group": {
                 "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "command": "zig build run",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
                 "isDefault": true
+            }
+        },
+        {
+            "label": "build-release",
+            "type": "shell",
+            "command": "zig build -Doptimize=ReleaseSafe",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": false
             }
         }
     ]

@@ -10,6 +10,7 @@ const win32 = struct {
     usingnamespace @import("win32").system.diagnostics.debug;
     usingnamespace @import("win32").foundation;
     usingnamespace @import("win32").graphics.gdi;
+    usingnamespace @import("win32").system.memory;
 };
 const L = win32.L;
 const HINSTANCE = win32.HINSTANCE;
@@ -19,9 +20,10 @@ const HDC = win32.HDC;
 // TODO(rosh): This is a global for now.
 var running: bool = undefined;
 var bitmapInfo: win32.BITMAPINFO = undefined;
-var bitmapMemory: ?*anyopaque = undefined;
-var bitmapHandle: ?win32.HBITMAP = undefined;
-var bitmapDeviceContext: ?HDC = null;
+var bitmapMemory: ?*anyopaque = null;
+var bitmapWidth: i32 = undefined;
+var bitmapHeight: i32 = undefined;
+const bytesPerPixel = 4;
 
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32) callconv(WINAPI) c_int {
     const WindowClass = win32.WNDCLASS{
@@ -44,12 +46,29 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
         if (windowHandle != null) {
             var message: win32.MSG = undefined;
             running = true;
+            var xOffset: u32 = 0;
+            var yOffset: u32 = 0;
             while (running) {
-                var messageResult = win32.GetMessage(&message, null, 0, 0);
-                if (messageResult > 0) {
+                while (win32.PeekMessage(&message, null, 0, 0, win32.PEEK_MESSAGE_REMOVE_TYPE.initFlags(.{ .REMOVE = 1 })) > 0) {
+                    if (message.message == win32.WM_QUIT) {
+                        running = false;
+                    }
                     _ = win32.TranslateMessage(&message);
                     _ = win32.DispatchMessage(&message);
-                } else break;
+                }
+
+                RenderWeirdGradient(xOffset, yOffset);
+                var deviceContext = win32.GetDC(windowHandle);
+                defer _ = win32.ReleaseDC(windowHandle, deviceContext);
+                var clientRect: win32.RECT = win32.RECT{ .bottom = 0, .left = 0, .right = 0, .top = 0 };
+                _ = win32.GetClientRect(windowHandle, &clientRect);
+                
+                var width = clientRect.right - clientRect.left;
+                var height = clientRect.bottom - clientRect.top;
+                if (deviceContext) |context| {
+                    UpdateWindow(context, &clientRect, 0, 0, width, height);
+                }
+                xOffset+=1;
             }
         } else {
             ProcessWindowsError();
@@ -92,8 +111,11 @@ fn WindowProc(windowHandle: HWND, message: u32, wParam: win32.WPARAM, lParam: wi
             var y = paint.rcPaint.top;
             var width = paint.rcPaint.right - paint.rcPaint.left;
             var height = paint.rcPaint.bottom - paint.rcPaint.top;
+
+            var clientRect: win32.RECT = win32.RECT{ .bottom = 0, .left = 0, .right = 0, .top = 0 };
+            _ = win32.GetClientRect(windowHandle, &clientRect);
             if (deviceContext) |context| {
-                UpdateWindow(context, x, y, width, height);
+                UpdateWindow(context, &clientRect, x, y, width, height);
             }
             _ = win32.EndPaint(windowHandle, &paint);
         },
@@ -105,8 +127,14 @@ fn WindowProc(windowHandle: HWND, message: u32, wParam: win32.WPARAM, lParam: wi
     return result;
 }
 
-fn UpdateWindow(deviceContext: HDC, x: i32, y: i32, width: i32, height: i32) void {
-    _ = win32.StretchDIBits(deviceContext, x, y, width, height, x, y, width, height, bitmapMemory, &bitmapInfo, win32.DIB_USAGE.RGB_COLORS, win32.ROP_CODE.SRCCOPY);
+fn UpdateWindow(deviceContext: HDC, windowRect: *win32.RECT, x: i32, y: i32, width: i32, height: i32) void {
+    _ = x;
+    _ = y;
+    _ = width;
+    _ = height;
+    const windowWidth = windowRect.*.right - windowRect.*.left;
+    const windowHeight = windowRect.*.bottom - windowRect.*.top;
+    _ = win32.StretchDIBits(deviceContext, 0, 0, bitmapWidth, bitmapHeight, 0, 0, windowWidth, windowHeight, bitmapMemory, &bitmapInfo, win32.DIB_USAGE.RGB_COLORS, win32.ROP_CODE.SRCCOPY);
 }
 
 fn resizeDIBSection(width: i32, height: i32) void {
@@ -114,18 +142,17 @@ fn resizeDIBSection(width: i32, height: i32) void {
     //TODO(rosh): Bulletproof this.
     // Maybe don't free first, free after, then free first if that fails.
 
-    if (bitmapHandle) |bmHandle| {
-        _ = win32.DeleteObject(bmHandle);
+    if (bitmapMemory != null) {
+        _ = win32.VirtualFree(bitmapMemory, 0, win32.VIRTUAL_FREE_TYPE.RELEASE);
     }
-    if (bitmapDeviceContext == null) {
-        //TODO(rosh): Should we recreate this under special circumstances.
-        bitmapDeviceContext = win32.CreateCompatibleDC(bitmapDeviceContext);
-    }
+
+    bitmapWidth = width;
+    bitmapHeight = height;
 
     bitmapInfo = win32.BITMAPINFO{ .bmiHeader = win32.BITMAPINFOHEADER{
         .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-        .biWidth = width,
-        .biHeight = height,
+        .biWidth = bitmapWidth,
+        .biHeight = -bitmapHeight,
         .biPlanes = 1,
         .biBitCount = 32,
         .biCompression = win32.BI_RGB,
@@ -136,7 +163,31 @@ fn resizeDIBSection(width: i32, height: i32) void {
         .biClrImportant = 0,
     }, .bmiColors = [1]win32.RGBQUAD{win32.RGBQUAD{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 }} };
 
-    bitmapHandle = win32.CreateDIBSection(bitmapDeviceContext, &bitmapInfo, win32.DIB_USAGE.RGB_COLORS, &bitmapMemory, null, 0);
+    var bitmapMemorySize: usize = @as(usize, @intCast((bitmapWidth * bitmapHeight) * bytesPerPixel));
+
+    bitmapMemory = win32.VirtualAlloc(null, bitmapMemorySize, win32.VIRTUAL_ALLOCATION_TYPE.COMMIT, win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE);
+    // TODO(rosh): Probably clear this to black
+}
+
+fn RenderWeirdGradient(xOffset: u32, yOffset: u32) void {
+    var pitch: usize = @intCast(bitmapWidth * bytesPerPixel);
+    var row: [*]u8 = @ptrCast(bitmapMemory);
+    var y: u32 = 0;
+    while (y < bitmapHeight) : (y += 1) {
+        var x: u32 = 0;
+        var pixel: [*]u32 = @ptrCast(@alignCast(row));
+        while (x < bitmapWidth) : (x += 1) {
+            //
+            // Pixel in memory: 00 00 00 00
+
+            const blue: u32 = x + @as(u32, @intCast(xOffset));
+            const green: u32 = y + @as(u32, @intCast(yOffset));
+            var color = (green << 8) | blue;
+            pixel[0] = color;
+            pixel += 1;
+        }
+        row += pitch;
+    }
 }
 
 fn ProcessWindowsError() void {

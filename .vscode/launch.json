@@ -12,6 +12,17 @@
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "build",
+        },
+        {
+            "name": "Run",
+            "type": "cppvsdbg",
+            "stopAtEntry": false,
+            "externalConsole": false,
+            "request": "launch",
+            "program": "${workspaceFolder}./zig-out/bin/handmade.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "build",
         }
     ]
 }
