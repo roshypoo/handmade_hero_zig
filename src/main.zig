@@ -9,8 +9,11 @@ const win32 = struct {
     usingnamespace @import("win32").ui.windows_and_messaging;
     usingnamespace @import("win32").system.diagnostics.debug;
     usingnamespace @import("win32").foundation;
+    usingnamespace @import("win32").system.library_loader;
     usingnamespace @import("win32").graphics.gdi;
     usingnamespace @import("win32").system.memory;
+    usingnamespace @import("win32").ui.input.xbox_controller;
+    usingnamespace @import("win32").ui.input.keyboard_and_mouse;
 };
 const L = win32.L;
 const HINSTANCE = win32.HINSTANCE;
@@ -44,10 +47,27 @@ const Win32WindowDimension = struct {
 var running: bool = undefined;
 var globalBackbuffer: Win32OffScreenBuffer = .{};
 
+var XinputGetState: *const fn (u32, ?*win32.XINPUT_STATE) callconv(WINAPI) isize = undefined;
+var XinputSetState: *const fn (u32, ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize = undefined;
+fn Win32LoadXinput() void {
+    if (win32.LoadLibraryA("xinput1_4.dll")) |XinputLibrary| {
+        if (win32.GetProcAddress(XinputLibrary, "XInputGetState")) |fun| {
+            XinputGetState = @ptrCast(fun);
+        }
+        if (win32.GetProcAddress(XinputLibrary, "XInputSetState")) |fun| {
+            XinputSetState = @ptrCast(fun);
+        }
+    }
+}
+
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32) callconv(WINAPI) c_int {
+    Win32LoadXinput();
     Win32ResizeDIBSection(&globalBackbuffer, 1200, 720);
     const WindowClass = win32.WNDCLASS{
-        .style = win32.WNDCLASS_STYLES.initFlags(.{ .HREDRAW = 1, .VREDRAW = 1 }),
+        .style = win32.WNDCLASS_STYLES.initFlags(.{
+            .HREDRAW = 1,
+            .VREDRAW = 1,
+        }),
         .lpfnWndProc = WindowProc,
         .cbClsExtra = 0,
         .cbWndExtra = 0,
@@ -60,12 +80,30 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
     };
 
     if (win32.RegisterClass(&WindowClass) > 0) {
-        const windowHandle = win32.CreateWindowEx(win32.WINDOW_EX_STYLE.initFlags(.{}), WindowClass.lpszClassName, win32.L("Handmade Hero"), win32.WINDOW_STYLE.initFlags(.{ .OVERLAPPED = 1, .VISIBLE = 1, .SYSMENU = 1, .THICKFRAME = 1 }), win32.CW_USEDEFAULT, win32.CW_USEDEFAULT, win32.CW_USEDEFAULT, win32.CW_USEDEFAULT, null, null, hInstance, null);
+        const windowHandle = win32.CreateWindowEx(
+            win32.WINDOW_EX_STYLE.initFlags(.{}),
+            WindowClass.lpszClassName,
+            win32.L("Handmade Hero"),
+            win32.WINDOW_STYLE.initFlags(.{
+                .OVERLAPPED = 1,
+                .VISIBLE = 1,
+                .SYSMENU = 1,
+                .THICKFRAME = 1,
+            }),
+            win32.CW_USEDEFAULT,
+            win32.CW_USEDEFAULT,
+            win32.CW_USEDEFAULT,
+            win32.CW_USEDEFAULT,
+            null,
+            null,
+            hInstance,
+            null,
+        );
 
         if (windowHandle != null) {
             running = true;
-            var xOffset: u32 = 0;
-            var yOffset: u32 = 0;
+            var xOffset: i32 = 0;
+            var yOffset: i32 = 0;
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
@@ -82,6 +120,33 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     _ = win32.DispatchMessage(&message);
                 }
 
+                var controllerIndex: u32 = 0;
+                while (controllerIndex < win32.XUSER_MAX_COUNT) : (controllerIndex += 1) {
+                    var controllerState: win32.XINPUT_STATE = undefined;
+                    if (XinputGetState(controllerIndex, &controllerState) == @intFromEnum(win32.WIN32_ERROR.NO_ERROR)) {
+                        // NOTE(rosh): The controller is plugged in.
+                        // TODO(rosh): see if controllerState.dwPacketNumber increments too rapidly.
+                        const pad: *win32.XINPUT_GAMEPAD = &controllerState.Gamepad;
+                        const up: bool = (pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
+                        const down: bool = (pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+                        const left: bool = (pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+                        const right: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
+                        const start: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_START != 0;
+                        const back: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_BACK != 0;
+                        const leftShoulder: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER != 0;
+                        const rightShoulder: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER != 0;
+                        const a: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_A != 0;
+                        const b: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_B != 0;
+                        const x: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_X != 0;
+                        const y: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_Y != 0;
+
+                        const stickX: i16 = pad.*.sThumbLX;
+                        const stickY: i16 = pad.*.sThumbLY;
+                        xOffset += @intCast(stickX >> 12);
+                        yOffset += @intCast(stickY >> 12);
+                        _ = [_]bool{ up, down, left, right, start, back, leftShoulder, rightShoulder, a, b, x, y };
+                    }
+                }
                 RenderWeirdGradient(globalBackbuffer, xOffset, yOffset);
 
                 var deviceContext = win32.GetDC(windowHandle);
@@ -90,18 +155,13 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                 const windowDimension = Win32WindowDimension.get(windowHandle);
                 if (deviceContext) |context| {
                     Win32CopyBufferToWindow(
-                        globalBackbuffer,
+                        &globalBackbuffer,
                         context,
-                        windowDimension.width,
-                        windowDimension.height,
-                        0,
-                        0,
                         windowDimension.width,
                         windowDimension.height,
                     );
                 }
                 xOffset += 1;
-                yOffset += 2;
             }
         } else {
             ProcessWindowsError();
@@ -137,25 +197,47 @@ fn WindowProc(
         win32.WM_ACTIVATEAPP => {
             win32.OutputDebugStringA("WM_ACTIVATE_APP\n");
         },
+        win32.WM_SYSKEYDOWN, win32.WM_SYSKEYUP, win32.WM_KEYUP, win32.WM_KEYDOWN => {
+            const vKCode: u32 = @intCast(wParam);
+            const wasDown: bool = (lParam & (1 << 30) != 0);
+            const isDown: bool = (lParam & (1 << 31) == 0);
+            if (wasDown != isDown) {
+                switch (vKCode) {
+                    'W' => {},
+                    'A' => {},
+                    'S' => {},
+                    'D' => {},
+                    'Q' => {},
+                    'E' => {},
+                    @intFromEnum(win32.VK_UP) => {},
+                    @intFromEnum(win32.VK_LEFT) => {},
+                    @intFromEnum(win32.VK_DOWN) => {},
+                    @intFromEnum(win32.VK_RIGHT) => {},
+                    @intFromEnum(win32.VK_ESCAPE) => {
+                        win32.OutputDebugStringA("Escape Key: ");
+                        if (isDown) {
+                            win32.OutputDebugStringA("isDown\n");
+                        }
+                        if (wasDown) {
+                            win32.OutputDebugStringA("wasDown\n");
+                        }
+                    },
+                    @intFromEnum(win32.VK_SPACE) => {},
+                    else => {},
+                }
+            }
+        },
         win32.WM_PAINT => {
             var paint: win32.PAINTSTRUCT = undefined;
             var deviceContext = win32.BeginPaint(windowHandle, &paint);
-            var x = paint.rcPaint.left;
-            var y = paint.rcPaint.top;
-            var width = paint.rcPaint.right - paint.rcPaint.left;
-            var height = paint.rcPaint.bottom - paint.rcPaint.top;
 
             var windowDimension = Win32WindowDimension.get(windowHandle);
             if (deviceContext) |context| {
                 Win32CopyBufferToWindow(
-                    globalBackbuffer,
+                    &globalBackbuffer,
                     context,
                     windowDimension.width,
                     windowDimension.height,
-                    x,
-                    y,
-                    width,
-                    height,
                 );
             }
             _ = win32.EndPaint(windowHandle, &paint);
@@ -169,20 +251,12 @@ fn WindowProc(
 }
 
 fn Win32CopyBufferToWindow(
-    buffer: Win32OffScreenBuffer,
+    buffer: *Win32OffScreenBuffer,
     deviceContext: HDC,
     windowWidth: i32,
     windowHeight: i32,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
 ) void {
     // TODO(rosh): Fix aspect ratio
-    _ = x;
-    _ = y;
-    _ = width;
-    _ = height;
     _ = win32.StretchDIBits(
         deviceContext,
         0,
@@ -191,10 +265,10 @@ fn Win32CopyBufferToWindow(
         windowHeight,
         0,
         0,
-        buffer.width,
-        buffer.height,
-        buffer.memory,
-        &buffer.info,
+        buffer.*.width,
+        buffer.*.height,
+        buffer.*.memory,
+        &buffer.*.info,
         win32.DIB_USAGE.RGB_COLORS,
         win32.ROP_CODE.SRCCOPY,
     );
@@ -241,7 +315,7 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
     buffer.*.pitch = @intCast((buffer.*.bytesPerPixel * width));
 }
 
-fn RenderWeirdGradient(buffer: Win32OffScreenBuffer, blueOffset: u32, greenOffset: u32) void {
+fn RenderWeirdGradient(buffer: Win32OffScreenBuffer, blueOffset: i32, greenOffset: i32) void {
     var row: [*]u8 = @ptrCast(buffer.memory);
     var y: u32 = 0;
     while (y < buffer.height) : (y += 1) {
@@ -251,8 +325,8 @@ fn RenderWeirdGradient(buffer: Win32OffScreenBuffer, blueOffset: u32, greenOffse
             //
             // Pixel in memory: 00 00 00 00
 
-            const blue: u32 = x + @as(u32, @intCast(blueOffset));
-            const green: u32 = y + @as(u32, @intCast(greenOffset));
+            const blue = x + @as(u32, @intCast(blueOffset));
+            const green = y + @as(u32, @intCast(greenOffset));
             var color = (green << 8) | blue;
             pixel[0] = color;
             pixel += 1;
