@@ -64,7 +64,7 @@ fn DirectSoundCreate_() win32.HRESULT {
     return @as(win32.HRESULT, -1);
 }
 
-fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: u16) void {
+fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: u32) void {
     var DirectSoundCreate: *const fn (
         pcGuidDevice: ?*const win32.Guid,
         ppDS: ?*?*win32.IDirectSound,
@@ -89,8 +89,8 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                     .wBitsPerSample = 16,
                     .cbSize = 0,
                 };
-                waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
                 waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+                waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
                 if (win32.SUCCEEDED(directSound.vtable.SetCooperativeLevel(directSound, windowHandle, win32.DSSCL_PRIORITY))) {
                     var bufferDescription: win32.DSBUFFERDESC = .{
                         .dwSize = @sizeOf(win32.DSBUFFERDESC),
@@ -109,14 +109,9 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                         null,
                     ))) {
                         if (pb) |primaryBuffer| {
-                            var result = primaryBuffer.vtable.SetFormat(primaryBuffer, &waveFormat);
-                            switch (result) {
-                                win32.DSERR_BADFORMAT => {
-
-                                }
-                            }
-                            std.debug.print("Primary buffer allocation result: {}\n", .{result});
-                            if (win32.SUCCEEDED(result)) {
+                            if (win32.SUCCEEDED(
+                                primaryBuffer.vtable.SetFormat(primaryBuffer, &waveFormat),
+                            )) {
                                 win32.OutputDebugStringA("Primary buffer format was set");
                                 //NOTE(rosh): We have finally set the format!!
                             } else {
@@ -137,12 +132,7 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                 };
                 var sb: ?*win32.IDirectSoundBuffer = undefined;
 
-                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(
-                    directSound,
-                    &bufferDescription,
-                    &sb,
-                    null
-                ))) {
+                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &sb, null))) {
                     if (sb) |secondaryBuffer| {
                         win32.OutputDebugStringA("secondary buffer created successfully");
                         _ = secondaryBuffer;
@@ -216,7 +206,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             running = true;
             var xOffset: i32 = 0;
             var yOffset: i32 = 0;
-            Win32InitDirectSound(windowHandle, 48000 * @sizeOf(u16) * 2, 48_000);
+            Win32InitDirectSound(windowHandle, 48000 * @sizeOf(i16) * 2, 48000);
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
