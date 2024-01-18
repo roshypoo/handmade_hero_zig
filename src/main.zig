@@ -10,10 +10,14 @@ const win32 = struct {
     usingnamespace @import("win32").system.diagnostics.debug;
     usingnamespace @import("win32").foundation;
     usingnamespace @import("win32").system.library_loader;
+    usingnamespace @import("win32").system.com;
+    usingnamespace @import("win32").system.iis;
     usingnamespace @import("win32").graphics.gdi;
     usingnamespace @import("win32").system.memory;
     usingnamespace @import("win32").ui.input.xbox_controller;
     usingnamespace @import("win32").ui.input.keyboard_and_mouse;
+    usingnamespace @import("win32").media.audio.direct_sound;
+    usingnamespace @import("win32").media.audio;
 };
 const L = win32.L;
 const HINSTANCE = win32.HINSTANCE;
@@ -47,8 +51,104 @@ const Win32WindowDimension = struct {
 var running: bool = undefined;
 var globalBackbuffer: Win32OffScreenBuffer = .{};
 
-var XinputGetState: *const fn (u32, ?*win32.XINPUT_STATE) callconv(WINAPI) isize = undefined;
-var XinputSetState: *const fn (u32, ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize = undefined;
+var XinputGetState: *const fn (u32, ?*win32.XINPUT_STATE) callconv(WINAPI) isize = XinputGetState_;
+fn XinputGetState_(_: u32, _: ?*win32.XINPUT_STATE) callconv((WINAPI)) isize {
+    return @intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED);
+}
+var XinputSetState: *const fn (u32, ?*win32.XINPUT_VIBRATION) callconv(WINAPI) isize = XinputSetState_;
+fn XinputSetState_(_: u32, _: ?*win32.XINPUT_VIBRATION) callconv((WINAPI)) isize {
+    return @intFromEnum(win32.ERROR_DEVICE_NOT_CONNECTED);
+}
+
+fn DirectSoundCreate_() win32.HRESULT {
+    return @as(win32.HRESULT, -1);
+}
+
+fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: u32) void {
+    var DirectSoundCreate: *const fn (
+        pcGuidDevice: ?*const win32.Guid,
+        ppDS: ?*?*win32.IDirectSound,
+        pUnkOuter: ?*win32.IUnknown,
+    ) callconv(WINAPI) i32 = undefined;
+
+    if (win32.LoadLibraryA("dsound.dll")) |DSoundLibrary| {
+        if (win32.GetProcAddress(DSoundLibrary, "DirectSoundCreate")) |fun| {
+            DirectSoundCreate = @ptrCast(fun);
+        }
+        var ds: ?*win32.IDirectSound = undefined;
+
+        if (win32.SUCCEEDED(DirectSoundCreate(null, &ds, null))) {
+            if (ds) |directSound| {
+                const GUID_NULL = win32.Guid.initString("00000000-0000-0000-0000-000000000000");
+                var waveFormat: win32.WAVEFORMATEX = .{
+                    .wFormatTag = win32.WAVE_FORMAT_PCM,
+                    .nChannels = 2,
+                    .nSamplesPerSec = samplesPerSecond,
+                    .nAvgBytesPerSec = undefined,
+                    .nBlockAlign = undefined,
+                    .wBitsPerSample = 16,
+                    .cbSize = 0,
+                };
+                waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+                waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
+                if (win32.SUCCEEDED(directSound.vtable.SetCooperativeLevel(directSound, windowHandle, win32.DSSCL_PRIORITY))) {
+                    var bufferDescription: win32.DSBUFFERDESC = .{
+                        .dwSize = @sizeOf(win32.DSBUFFERDESC),
+                        .dwFlags = win32.DSBCAPS_PRIMARYBUFFER,
+                        .dwBufferBytes = 0,
+                        .dwReserved = 0,
+                        .lpwfxFormat = null,
+                        .guid3DAlgorithm = GUID_NULL,
+                    };
+                    var pb: ?*win32.IDirectSoundBuffer = undefined;
+
+                    if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(
+                        directSound,
+                        &bufferDescription,
+                        &pb,
+                        null,
+                    ))) {
+                        if (pb) |primaryBuffer| {
+                            if (win32.SUCCEEDED(
+                                primaryBuffer.vtable.SetFormat(primaryBuffer, &waveFormat),
+                            )) {
+                                win32.OutputDebugStringA("Primary buffer format was set");
+                                //NOTE(rosh): We have finally set the format!!
+                            } else {
+                                //TODO(rosh): Diagnostic
+                            }
+                        }
+                    }
+                } else {
+                    //TODO(rosh): Diagnostic
+                }
+                var bufferDescription: win32.DSBUFFERDESC = .{
+                    .dwSize = @sizeOf(win32.DSBUFFERDESC),
+                    .dwFlags = 0,
+                    .dwBufferBytes = bufferSize,
+                    .dwReserved = 0,
+                    .lpwfxFormat = &waveFormat,
+                    .guid3DAlgorithm = GUID_NULL,
+                };
+                var sb: ?*win32.IDirectSoundBuffer = undefined;
+
+                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &sb, null))) {
+                    if (sb) |secondaryBuffer| {
+                        win32.OutputDebugStringA("secondary buffer created successfully");
+                        _ = secondaryBuffer;
+                    } else {
+                        win32.OutputDebugStringA("secondary buffer created successfully");
+                    }
+                }
+            }
+        } else {
+            //TODO(rosh): Diagnostic
+        }
+    } else {
+        //TODO(rosh): Diagnostic
+    }
+}
+
 fn Win32LoadXinput() void {
     if (win32.LoadLibraryA("xinput1_4.dll")) |XinputLibrary| {
         if (win32.GetProcAddress(XinputLibrary, "XInputGetState")) |fun| {
@@ -57,6 +157,8 @@ fn Win32LoadXinput() void {
         if (win32.GetProcAddress(XinputLibrary, "XInputSetState")) |fun| {
             XinputSetState = @ptrCast(fun);
         }
+    } else {
+        //TODO(rosh): Diagnostic
     }
 }
 
@@ -104,6 +206,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             running = true;
             var xOffset: i32 = 0;
             var yOffset: i32 = 0;
+            Win32InitDirectSound(windowHandle, 48000 * @sizeOf(i16) * 2, 48000);
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
@@ -140,14 +243,14 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         const x: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_X != 0;
                         const y: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_Y != 0;
 
-                        const stickX: i16 = pad.*.sThumbLX;
-                        const stickY: i16 = pad.*.sThumbLY;
+                        const stickX = pad.*.sThumbLX;
+                        const stickY = pad.*.sThumbLY;
                         xOffset += @intCast(stickX >> 12);
                         yOffset += @intCast(stickY >> 12);
                         _ = [_]bool{ up, down, left, right, start, back, leftShoulder, rightShoulder, a, b, x, y };
                     }
                 }
-                RenderWeirdGradient(globalBackbuffer, xOffset, yOffset);
+                RenderWeirdGradient(&globalBackbuffer, xOffset, yOffset);
 
                 var deviceContext = win32.GetDC(windowHandle);
                 defer _ = win32.ReleaseDC(windowHandle, deviceContext);
@@ -223,6 +326,12 @@ fn WindowProc(
                         }
                     },
                     @intFromEnum(win32.VK_SPACE) => {},
+                    @intFromEnum(win32.VK_F4) => {
+                        const isAltKeyDown = lParam & (1 << 29) != 0;
+                        if (isAltKeyDown) {
+                            running = false;
+                        }
+                    },
                     else => {},
                 }
             }
@@ -315,13 +424,13 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
     buffer.*.pitch = @intCast((buffer.*.bytesPerPixel * width));
 }
 
-fn RenderWeirdGradient(buffer: Win32OffScreenBuffer, blueOffset: i32, greenOffset: i32) void {
-    var row: [*]u8 = @ptrCast(buffer.memory);
+fn RenderWeirdGradient(buffer: *Win32OffScreenBuffer, blueOffset: i32, greenOffset: i32) void {
+    var row: [*]u8 = @ptrCast(buffer.*.memory);
     var y: u32 = 0;
-    while (y < buffer.height) : (y += 1) {
+    while (y < buffer.*.height) : (y += 1) {
         var x: u32 = 0;
         var pixel: [*]u32 = @ptrCast(@alignCast(row));
-        while (x < buffer.width) : (x += 1) {
+        while (x < buffer.*.width) : (x += 1) {
             //
             // Pixel in memory: 00 00 00 00
 
@@ -331,7 +440,7 @@ fn RenderWeirdGradient(buffer: Win32OffScreenBuffer, blueOffset: i32, greenOffse
             pixel[0] = color;
             pixel += 1;
         }
-        row += buffer.pitch;
+        row += buffer.*.pitch;
     }
 }
 
