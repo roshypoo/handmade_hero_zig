@@ -274,7 +274,10 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     if (win32.SUCCEEDED(secondaryBuffer.vtable.GetCurrentPosition(secondaryBuffer, &playCursor, &writeCursor))) {
                         const byteToLock: u32 = (runningSampleIndex * bytesPerSample) % secondaryBufferSize;
                         var bytesToWrite: u32 = undefined;
-                        if (byteToLock > playCursor) {
+                        if (byteToLock == playCursor) {
+                            bytesToWrite = secondaryBufferSize;
+                        }
+                        else if (byteToLock > playCursor) {
                             bytesToWrite = secondaryBufferSize - byteToLock;
                             bytesToWrite += playCursor;
                         } else {
