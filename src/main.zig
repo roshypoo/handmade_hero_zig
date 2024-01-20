@@ -50,6 +50,7 @@ const Win32WindowDimension = struct {
 // TODO(rosh): These are global for now.
 var running: bool = undefined;
 var globalBackbuffer: Win32OffScreenBuffer = .{};
+var globalSoundSecondaryBuffer: ?*win32.IDirectSoundBuffer = undefined;
 
 var XinputGetState: *const fn (u32, ?*win32.XINPUT_STATE) callconv(WINAPI) isize = XinputGetState_;
 fn XinputGetState_(_: u32, _: ?*win32.XINPUT_STATE) callconv((WINAPI)) isize {
@@ -130,10 +131,9 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                     .lpwfxFormat = &waveFormat,
                     .guid3DAlgorithm = GUID_NULL,
                 };
-                var sb: ?*win32.IDirectSoundBuffer = undefined;
 
-                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &sb, null))) {
-                    if (sb) |secondaryBuffer| {
+                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &globalSoundSecondaryBuffer, null))) {
+                    if (globalSoundSecondaryBuffer) |secondaryBuffer| {
                         win32.OutputDebugStringA("secondary buffer created successfully");
                         _ = secondaryBuffer;
                     } else {
@@ -203,10 +203,25 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
         );
 
         if (windowHandle != null) {
-            running = true;
+            // NOTE(rosh): Graphics test
             var xOffset: i32 = 0;
             var yOffset: i32 = 0;
-            Win32InitDirectSound(windowHandle, 48000 * @sizeOf(i16) * 2, 48000);
+
+            // NOTE(rosh): Sound test
+            const samplesPerSecond: u32 = 48000;
+            var toneHz: u32 = 256;
+            const toneVolume = 3000;
+            var runningSampleIndex: u32 = 0;
+            var squareWavePeriod: u32 = samplesPerSecond / toneHz;
+            var halfsquareWavePeriod: u32 = squareWavePeriod / 2;
+            const bytesPerSample: u32 = @sizeOf(i16) * 2;
+            const secondaryBufferSize = samplesPerSecond * bytesPerSample;
+
+            running = true;
+            Win32InitDirectSound(windowHandle, secondaryBufferSize, samplesPerSecond);
+            if (globalSoundSecondaryBuffer) |sb| {
+                _ = sb.vtable.Play(sb, 0, 0, win32.DSBPLAY_LOOPING);
+            }
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
@@ -251,6 +266,80 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     }
                 }
                 RenderWeirdGradient(&globalBackbuffer, xOffset, yOffset);
+
+                // TODO(rosh): DirectSound output test
+                var playCursor: u32 = undefined;
+                var writeCursor: u32 = undefined;
+                if (globalSoundSecondaryBuffer) |secondaryBuffer| {
+                    if (win32.SUCCEEDED(secondaryBuffer.vtable.GetCurrentPosition(secondaryBuffer, &playCursor, &writeCursor))) {
+                        const byteToLock: u32 = (runningSampleIndex * bytesPerSample) % secondaryBufferSize;
+                        var bytesToWrite: u32 = undefined;
+                        if (byteToLock > playCursor) {
+                            bytesToWrite = secondaryBufferSize - byteToLock;
+                            bytesToWrite += playCursor;
+                        } else {
+                            bytesToWrite = playCursor - byteToLock;
+                        }
+
+                        var region1: ?*anyopaque = undefined;
+                        var region1Size: u32 = undefined;
+                        var region2: ?*anyopaque = undefined;
+                        var region2Size: u32 = undefined;
+
+                        if (win32.SUCCEEDED(secondaryBuffer.*.vtable.Lock(
+                            secondaryBuffer,
+                            byteToLock,
+                            bytesToWrite,
+                            &region1,
+                            &region1Size,
+                            &region2,
+                            &region2Size,
+                            0,
+                        ))) {
+                            var sampleOut: [*]i16 = undefined;
+                            //TODO(rosh): Assert that region1Size/region2Size is valid
+                            if (region1) |ptr| {
+                                sampleOut = @ptrCast(@alignCast(ptr));
+                                const region1SampleCount = region1Size / bytesPerSample;
+                                for (0..region1SampleCount) |_| {
+                                    const sampleValue: i16 = if (((runningSampleIndex / halfsquareWavePeriod) % 2) != 0)
+                                        toneVolume
+                                    else
+                                        -toneVolume;
+
+                                    sampleOut[0] = sampleValue;
+                                    sampleOut += @as(usize, 1);
+                                    sampleOut[0] = sampleValue;
+                                    sampleOut += @as(usize, 1);
+                                    runningSampleIndex += 1;
+                                }
+                            }
+                            if (region2) |ptr| {
+                                const region2SampleCount = region2Size / bytesPerSample;
+                                sampleOut = @ptrCast(@alignCast(ptr));
+                                for (0..region2SampleCount) |_| {
+                                    const sampleValue: i16 = if (((runningSampleIndex / halfsquareWavePeriod) % 2) != 0)
+                                        toneVolume
+                                    else
+                                        -toneVolume;
+
+                                    sampleOut[0] = sampleValue;
+                                    sampleOut += @as(usize, 1);
+                                    sampleOut[0] = sampleValue;
+                                    sampleOut += @as(usize, 1);
+                                    runningSampleIndex += 1;
+                                }
+                            }
+                            _ = secondaryBuffer.*.vtable.Unlock(
+                                secondaryBuffer,
+                                region1,
+                                region1Size,
+                                region2,
+                                region2Size,
+                            );
+                        }
+                    }
+                }
 
                 var deviceContext = win32.GetDC(windowHandle);
                 defer _ = win32.ReleaseDC(windowHandle, deviceContext);
