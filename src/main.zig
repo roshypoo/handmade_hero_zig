@@ -4,6 +4,9 @@ const WINAPI = @import("std").os.windows.WINAPI;
 const std = @import("std");
 const log = std.log.info;
 
+// TODO(rosh): Implement sine ourselves.
+const math = std.math;
+
 const win32 = struct {
     usingnamespace @import("win32").zig;
     usingnamespace @import("win32").ui.windows_and_messaging;
@@ -47,10 +50,34 @@ const Win32WindowDimension = struct {
         return Win32WindowDimension{ .width = width, .height = height };
     }
 };
+
+const Win32SoundOutput = struct {
+    samplesPerSecond: u32 = undefined,
+    toneHz: u32 = undefined,
+    toneVolume: u16 = undefined,
+    runningSampleIndex: u32 = undefined,
+    wavePeriod: u32 = undefined,
+    bytesPerSample: u32 = undefined,
+    secondaryBufferSize: u32 = undefined,
+    latencySampleCount: u32 = undefined,
+    tSine: f32 = undefined,
+
+    fn create(samplesPerSecond: u32, toneHz: u32, toneVolume: u16, bytesPerSample: u32) Win32SoundOutput {
+        return Win32SoundOutput{
+            .samplesPerSecond = samplesPerSecond,
+            .toneHz = toneHz,
+            .toneVolume = toneVolume,
+            .runningSampleIndex = 0,
+            .wavePeriod = samplesPerSecond / toneHz,
+            .bytesPerSample = bytesPerSample,
+            .secondaryBufferSize = samplesPerSecond * bytesPerSample,
+        };
+    }
+};
 // TODO(rosh): These are global for now.
 var running: bool = undefined;
 var globalBackbuffer: Win32OffScreenBuffer = .{};
-var globalSoundSecondaryBuffer: ?*win32.IDirectSoundBuffer = undefined;
+var globalSoundSecondaryBuffer: *win32.IDirectSoundBuffer = undefined;
 
 var XinputGetState: *const fn (u32, ?*win32.XINPUT_STATE) callconv(WINAPI) isize = XinputGetState_;
 fn XinputGetState_(_: u32, _: ?*win32.XINPUT_STATE) callconv((WINAPI)) isize {
@@ -131,14 +158,12 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                     .lpwfxFormat = &waveFormat,
                     .guid3DAlgorithm = GUID_NULL,
                 };
-
-                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &globalSoundSecondaryBuffer, null))) {
-                    if (globalSoundSecondaryBuffer) |secondaryBuffer| {
-                        win32.OutputDebugStringA("secondary buffer created successfully");
-                        _ = secondaryBuffer;
-                    } else {
-                        win32.OutputDebugStringA("secondary buffer created successfully");
+                var secondaryBuffer: ?*win32.IDirectSoundBuffer = undefined;
+                if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &secondaryBuffer, null))) {
+                    if (secondaryBuffer) |sb| {
+                        globalSoundSecondaryBuffer = sb;
                     }
+                    win32.OutputDebugStringA("secondary buffer created successfully");
                 }
             }
         } else {
@@ -159,6 +184,55 @@ fn Win32LoadXinput() void {
         }
     } else {
         //TODO(rosh): Diagnostic
+    }
+}
+
+fn Win32FillSoundBuffer(soundOutput: *Win32SoundOutput, bytesToLock: u32, bytesToWrite: u32) void {
+    var region1: ?*anyopaque = undefined;
+    var region1Size: u32 = undefined;
+    var region2: ?*anyopaque = undefined;
+    var region2Size: u32 = undefined;
+
+    if (win32.SUCCEEDED(globalSoundSecondaryBuffer.*.vtable.Lock(
+        globalSoundSecondaryBuffer,
+        bytesToLock,
+        bytesToWrite,
+        &region1,
+        &region1Size,
+        &region2,
+        &region2Size,
+        0,
+    ))) {
+        //TODO(rosh): Assert that region1Size/region2Size is valid
+        if (region1) |ptr| {
+            var sampleOut: [*]i16 = @ptrCast(@alignCast(ptr));
+            const region1SampleCount = region1Size / soundOutput.bytesPerSample;
+            for (0..region1SampleCount) |_| {
+                const sineValue = math.sin(soundOutput.tSine);
+                const sampleValue: i16 = @intFromFloat(sineValue * @as(f32, @floatFromInt(soundOutput.toneVolume)));
+
+                sampleOut[0] = sampleValue;
+                sampleOut += @as(usize, 1);
+                sampleOut[0] = sampleValue;
+                sampleOut += @as(usize, 1);
+                soundOutput.runningSampleIndex += 1;
+                soundOutput.tSine += 2.0 * math.pi * 1.0 / @as(f32, @floatFromInt(soundOutput.wavePeriod));
+            }
+        }
+        if (region2) |ptr| {
+            const region2SampleCount = region2Size / soundOutput.bytesPerSample;
+            var sampleOut: [*]i16 = @ptrCast(@alignCast(ptr));
+            for (0..region2SampleCount) |_| {
+                const sineValue = math.sin(soundOutput.tSine);
+                const sampleValue: i16 = @intFromFloat(sineValue * @as(f32, @floatFromInt(soundOutput.toneVolume)));
+                sampleOut[0] = sampleValue;
+                sampleOut += @as(usize, 1);
+                sampleOut[0] = sampleValue;
+                sampleOut += @as(usize, 1);
+                soundOutput.runningSampleIndex += 1;
+                soundOutput.tSine += 2.0 * math.pi * 1.0 / @as(f32, @floatFromInt(soundOutput.wavePeriod));
+            }
+        }
     }
 }
 
@@ -208,20 +282,28 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             var yOffset: i32 = 0;
 
             // NOTE(rosh): Sound test
-            const samplesPerSecond: u32 = 48000;
-            var toneHz: u32 = 256;
-            const toneVolume = 3000;
-            var runningSampleIndex: u32 = 0;
-            var squareWavePeriod: u32 = samplesPerSecond / toneHz;
-            var halfsquareWavePeriod: u32 = squareWavePeriod / 2;
-            const bytesPerSample: u32 = @sizeOf(i16) * 2;
-            const secondaryBufferSize = samplesPerSecond * bytesPerSample;
+            var soundOutput = Win32SoundOutput{};
+            soundOutput.samplesPerSecond = 48000;
+            soundOutput.toneHz = 256;
+            soundOutput.toneVolume = 1000;
+            soundOutput.runningSampleIndex = 0;
+            soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
+            soundOutput.bytesPerSample = @sizeOf(u16) * 2;
+            soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
+            soundOutput.latencySampleCount = soundOutput.samplesPerSecond / 15;
+            var isSoundPlaying = false;
 
             running = true;
-            Win32InitDirectSound(windowHandle, secondaryBufferSize, samplesPerSecond);
-            if (globalSoundSecondaryBuffer) |sb| {
-                _ = sb.vtable.Play(sb, 0, 0, win32.DSBPLAY_LOOPING);
-            }
+            Win32InitDirectSound(
+                windowHandle,
+                soundOutput.secondaryBufferSize,
+                soundOutput.samplesPerSecond,
+            );
+            Win32FillSoundBuffer(
+                &soundOutput,
+                0,
+                soundOutput.latencySampleCount * soundOutput.bytesPerSample,
+            );
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
@@ -245,23 +327,27 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         // NOTE(rosh): The controller is plugged in.
                         // TODO(rosh): see if controllerState.dwPacketNumber increments too rapidly.
                         const pad: *win32.XINPUT_GAMEPAD = &controllerState.Gamepad;
-                        const up: bool = (pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
-                        const down: bool = (pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-                        const left: bool = (pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-                        const right: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
-                        const start: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_START != 0;
-                        const back: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_BACK != 0;
+                        const up: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
+                        const down: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+                        const left: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+                        const right: bool = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
+                        const start: bool = pad.wButtons & win32.XINPUT_GAMEPAD_START != 0;
+                        const back: bool = pad.wButtons & win32.XINPUT_GAMEPAD_BACK != 0;
                         const leftShoulder: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER != 0;
-                        const rightShoulder: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER != 0;
-                        const a: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_A != 0;
-                        const b: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_B != 0;
-                        const x: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_X != 0;
-                        const y: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_Y != 0;
+                        const rightShoulder: bool = pad.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER != 0;
+                        const a: bool = pad.wButtons & win32.XINPUT_GAMEPAD_A != 0;
+                        const b: bool = pad.wButtons & win32.XINPUT_GAMEPAD_B != 0;
+                        const x: bool = pad.wButtons & win32.XINPUT_GAMEPAD_X != 0;
+                        const y: bool = pad.wButtons & win32.XINPUT_GAMEPAD_Y != 0;
 
-                        const stickX = pad.*.sThumbLX;
-                        const stickY = pad.*.sThumbLY;
-                        xOffset += @intCast(stickX >> 12);
-                        yOffset += @intCast(stickY >> 12);
+                        const stickX = pad.sThumbLX;
+                        const stickY = pad.sThumbLY;
+                        //TODO(rosh): Need to handle joystick deadzone.
+                        xOffset += @divTrunc(stickX, 12000);
+                        yOffset += @divTrunc(stickY, 12000);
+
+                        // soundOutput.toneHz = 512 * 256 * @as(u32, @intCast(@divTrunc(stickY, 32000)));
+                        // soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
                         _ = [_]bool{ up, down, left, right, start, back, leftShoulder, rightShoulder, a, b, x, y };
                     }
                 }
@@ -270,78 +356,26 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                 // TODO(rosh): DirectSound output test
                 var playCursor: u32 = undefined;
                 var writeCursor: u32 = undefined;
-                if (globalSoundSecondaryBuffer) |secondaryBuffer| {
-                    if (win32.SUCCEEDED(secondaryBuffer.vtable.GetCurrentPosition(secondaryBuffer, &playCursor, &writeCursor))) {
-                        const byteToLock: u32 = (runningSampleIndex * bytesPerSample) % secondaryBufferSize;
-                        var bytesToWrite: u32 = undefined;
-                        if (byteToLock == playCursor) {
-                            bytesToWrite = secondaryBufferSize;
-                        }
-                        else if (byteToLock > playCursor) {
-                            bytesToWrite = secondaryBufferSize - byteToLock;
-                            bytesToWrite += playCursor;
-                        } else {
-                            bytesToWrite = playCursor - byteToLock;
-                        }
+                if (win32.SUCCEEDED(globalSoundSecondaryBuffer.vtable.GetCurrentPosition(globalSoundSecondaryBuffer, &playCursor, &writeCursor))) {
+                    const byteToLock: u32 = (soundOutput.runningSampleIndex * soundOutput.bytesPerSample) % soundOutput.secondaryBufferSize;
 
-                        var region1: ?*anyopaque = undefined;
-                        var region1Size: u32 = undefined;
-                        var region2: ?*anyopaque = undefined;
-                        var region2Size: u32 = undefined;
-
-                        if (win32.SUCCEEDED(secondaryBuffer.*.vtable.Lock(
-                            secondaryBuffer,
-                            byteToLock,
-                            bytesToWrite,
-                            &region1,
-                            &region1Size,
-                            &region2,
-                            &region2Size,
-                            0,
-                        ))) {
-                            var sampleOut: [*]i16 = undefined;
-                            //TODO(rosh): Assert that region1Size/region2Size is valid
-                            if (region1) |ptr| {
-                                sampleOut = @ptrCast(@alignCast(ptr));
-                                const region1SampleCount = region1Size / bytesPerSample;
-                                for (0..region1SampleCount) |_| {
-                                    const sampleValue: i16 = if (((runningSampleIndex / halfsquareWavePeriod) % 2) != 0)
-                                        toneVolume
-                                    else
-                                        -toneVolume;
-
-                                    sampleOut[0] = sampleValue;
-                                    sampleOut += @as(usize, 1);
-                                    sampleOut[0] = sampleValue;
-                                    sampleOut += @as(usize, 1);
-                                    runningSampleIndex += 1;
-                                }
-                            }
-                            if (region2) |ptr| {
-                                const region2SampleCount = region2Size / bytesPerSample;
-                                sampleOut = @ptrCast(@alignCast(ptr));
-                                for (0..region2SampleCount) |_| {
-                                    const sampleValue: i16 = if (((runningSampleIndex / halfsquareWavePeriod) % 2) != 0)
-                                        toneVolume
-                                    else
-                                        -toneVolume;
-
-                                    sampleOut[0] = sampleValue;
-                                    sampleOut += @as(usize, 1);
-                                    sampleOut[0] = sampleValue;
-                                    sampleOut += @as(usize, 1);
-                                    runningSampleIndex += 1;
-                                }
-                            }
-                            _ = secondaryBuffer.*.vtable.Unlock(
-                                secondaryBuffer,
-                                region1,
-                                region1Size,
-                                region2,
-                                region2Size,
-                            );
-                        }
+                    var targetCursor = (playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.secondaryBufferSize;
+                    var bytesToWrite: u32 = undefined;
+                    // TODO(rosh): Change this to using lower latency offset for play cursor
+                    // when we actually start having sound effects.
+                    if (byteToLock > targetCursor) {
+                        bytesToWrite = soundOutput.secondaryBufferSize - byteToLock;
+                        bytesToWrite += targetCursor;
+                    } else {
+                        bytesToWrite = targetCursor - byteToLock;
                     }
+
+                    Win32FillSoundBuffer(&soundOutput, byteToLock, bytesToWrite);
+                }
+
+                if (!isSoundPlaying) {
+                    _ = globalSoundSecondaryBuffer.vtable.Play(globalSoundSecondaryBuffer, 0, 0, win32.DSBPLAY_LOOPING);
+                    isSoundPlaying = true;
                 }
 
                 var deviceContext = win32.GetDC(windowHandle);
@@ -444,7 +478,7 @@ fn WindowProc(
             _ = win32.EndPaint(windowHandle, &paint);
         },
         else => {
-            result = win32.DefWindowProc(windowHandle, message, wParam, lParam);
+            result = win32.DefWindowProcA(windowHandle, message, wParam, lParam);
         },
     }
 
