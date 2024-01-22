@@ -21,6 +21,7 @@ const win32 = struct {
     usingnamespace @import("win32").ui.input.keyboard_and_mouse;
     usingnamespace @import("win32").media.audio.direct_sound;
     usingnamespace @import("win32").media.audio;
+    usingnamespace @import("win32").system.performance;
 };
 const L = win32.L;
 const HINSTANCE = win32.HINSTANCE;
@@ -237,6 +238,12 @@ fn Win32FillSoundBuffer(soundOutput: *Win32SoundOutput, bytesToLock: u32, bytesT
 }
 
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32) callconv(WINAPI) c_int {
+    
+    var perfCountFrequencyResult: win32.LARGE_INTEGER = undefined;
+    _ = win32.QueryPerformanceFrequency(&perfCountFrequencyResult);
+    const perfCountFrequency = perfCountFrequencyResult.QuadPart;
+
+
     Win32LoadXinput();
     Win32ResizeDIBSection(&globalBackbuffer, 1200, 720);
     const WindowClass = win32.WNDCLASS{
@@ -254,6 +261,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
         .lpszMenuName = null,
         .lpszClassName = win32.L("HandmadeHeroWindowClass"),
     };
+
 
     if (win32.RegisterClass(&WindowClass) > 0) {
         const windowHandle = win32.CreateWindowEx(
@@ -291,9 +299,8 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             soundOutput.bytesPerSample = @sizeOf(u16) * 2;
             soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
             soundOutput.latencySampleCount = soundOutput.samplesPerSecond / 15;
-            var isSoundPlaying = false;
 
-            running = true;
+
             Win32InitDirectSound(
                 windowHandle,
                 soundOutput.secondaryBufferSize,
@@ -304,6 +311,13 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                 0,
                 soundOutput.latencySampleCount * soundOutput.bytesPerSample,
             );
+            _ = globalSoundSecondaryBuffer.vtable.Play(globalSoundSecondaryBuffer, 0, 0, win32.DSBPLAY_LOOPING);
+
+             var lastCounter: win32.LARGE_INTEGER = undefined;
+            _ = win32.QueryPerformanceCounter(&lastCounter);
+            var lastCycleCount: u64 = rdtscp();
+            
+            running = true;
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
@@ -343,8 +357,8 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         const stickX = pad.sThumbLX;
                         const stickY = pad.sThumbLY;
                         //TODO(rosh): Need to handle joystick deadzone.
-                        xOffset += @divTrunc(stickX, 12000);
-                        yOffset += @divTrunc(stickY, 12000);
+                        xOffset += @divTrunc(stickX, 4096);
+                        yOffset += @divTrunc(stickY, 4096);
 
                         // soundOutput.toneHz = 512 * 256 * @as(u32, @intCast(@divTrunc(stickY, 32000)));
                         // soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
@@ -373,11 +387,6 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     Win32FillSoundBuffer(&soundOutput, byteToLock, bytesToWrite);
                 }
 
-                if (!isSoundPlaying) {
-                    _ = globalSoundSecondaryBuffer.vtable.Play(globalSoundSecondaryBuffer, 0, 0, win32.DSBPLAY_LOOPING);
-                    isSoundPlaying = true;
-                }
-
                 var deviceContext = win32.GetDC(windowHandle);
                 defer _ = win32.ReleaseDC(windowHandle, deviceContext);
 
@@ -391,6 +400,22 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     );
                 }
                 xOffset += 1;
+
+                const endCycleCount = rdtscp();
+
+                var endCounter: win32.LARGE_INTEGER = undefined;
+                _ = win32.QueryPerformanceCounter(&endCounter);
+                
+                // TODO(rosh): Display the value here
+                const cyclesElapsed: u64 = endCycleCount - lastCycleCount;
+                const counterElapsed: f64 = @floatFromInt(endCounter.QuadPart - lastCounter.QuadPart);
+                const msPerFrame: f32 = @floatCast((1000 * counterElapsed) / @as(f64, @floatFromInt(perfCountFrequency)));
+                const fps: f32 = @floatCast(@as(f64, @floatFromInt(perfCountFrequency)) / counterElapsed);
+                const mcpf: f32 = @floatCast(@as(f64, @floatFromInt(cyclesElapsed)) / (1000 * 1000));
+
+                std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{msPerFrame, fps, mcpf});
+                lastCounter = endCounter;
+                lastCycleCount = endCycleCount;
             }
         } else {
             ProcessWindowsError();
@@ -573,4 +598,17 @@ fn RenderWeirdGradient(buffer: *Win32OffScreenBuffer, blueOffset: i32, greenOffs
 fn ProcessWindowsError() void {
     var errorMessage = win32.GetLastError();
     std.debug.print("{}", .{errorMessage});
+}
+
+
+fn rdtscp() u64 {
+    var hi: u64 = 0;
+    var low: u64 = 0;
+
+    asm volatile (
+        \\rdtscp
+        : [low] "={eax}" (low),
+          [hi] "={edx}" (hi)
+    );
+    return (@as(u64, hi) << 32) | @as(u64, low);
 }
