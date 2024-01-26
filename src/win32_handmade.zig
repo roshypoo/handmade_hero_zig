@@ -1,7 +1,26 @@
+/// TODO(rosh): THIS IS NOT A FINAL PLATFORM LAYER
+/// - Saved game location
+/// - Getting a handle to our own executable file
+/// - Asset loading
+/// - Threading (launch a thread)
+/// - Raw Input (support for multiple keyboard)
+/// - Sleep/timeBeginPeriod
+/// - ClipCursor() (for multimonitor support)
+/// - Fullscreen support
+/// - WM_SETCURSOR (control cursor visibility)
+/// - QueryCancelAutoPlay
+/// - WM_ACTIVATE_APP (for when we are not the active application)
+/// - Blit speed improvements (BitBlit)
+/// - Hardware acceleration (OpenGL or Direct3d or BOTH??)
+/// - GetKeyboardLayout (International WASD support)
+/// 
+/// Just a partial list of stuff!!!
+
 pub const UNICODE = true;
 
 const WINAPI = @import("std").os.windows.WINAPI;
 const std = @import("std");
+const handmade = @import("handmade.zig");
 const log = std.log.info;
 
 // TODO(rosh): Implement sine ourselves.
@@ -315,7 +334,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
 
              var lastCounter: win32.LARGE_INTEGER = undefined;
             _ = win32.QueryPerformanceCounter(&lastCounter);
-            var lastCycleCount: u64 = rdtscp();
+            var lastCycleCount: u64 = rdtsc();
             
             running = true;
             while (running) {
@@ -365,7 +384,16 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         _ = [_]bool{ up, down, left, right, start, back, leftShoulder, rightShoulder, a, b, x, y };
                     }
                 }
-                RenderWeirdGradient(&globalBackbuffer, xOffset, yOffset);
+
+                var gameOffscreenBuffer = handmade.game_offscreen_buffer{
+                    .memory = globalBackbuffer.memory,
+                    .bytesPerPixel = globalBackbuffer.bytesPerPixel,
+                    .height = globalBackbuffer.height,
+                    .width = globalBackbuffer.width,
+                    .pitch = globalBackbuffer.pitch
+                };
+               
+                handmade.GameUpdateAndRender(&gameOffscreenBuffer,xOffset, yOffset);
 
                 // TODO(rosh): DirectSound output test
                 var playCursor: u32 = undefined;
@@ -375,8 +403,6 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
 
                     var targetCursor = (playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.secondaryBufferSize;
                     var bytesToWrite: u32 = undefined;
-                    // TODO(rosh): Change this to using lower latency offset for play cursor
-                    // when we actually start having sound effects.
                     if (byteToLock > targetCursor) {
                         bytesToWrite = soundOutput.secondaryBufferSize - byteToLock;
                         bytesToWrite += targetCursor;
@@ -399,9 +425,8 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         windowDimension.height,
                     );
                 }
-                xOffset += 1;
 
-                const endCycleCount = rdtscp();
+                const endCycleCount = rdtsc();
 
                 var endCounter: win32.LARGE_INTEGER = undefined;
                 _ = win32.QueryPerformanceCounter(&endCounter);
@@ -575,40 +600,21 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
     buffer.*.pitch = @intCast((buffer.*.bytesPerPixel * width));
 }
 
-fn RenderWeirdGradient(buffer: *Win32OffScreenBuffer, blueOffset: i32, greenOffset: i32) void {
-    var row: [*]u8 = @ptrCast(buffer.*.memory);
-    var y: u32 = 0;
-    while (y < buffer.*.height) : (y += 1) {
-        var x: u32 = 0;
-        var pixel: [*]u32 = @ptrCast(@alignCast(row));
-        while (x < buffer.*.width) : (x += 1) {
-            //
-            // Pixel in memory: 00 00 00 00
-
-            const blue = x + @as(u32, @intCast(blueOffset));
-            const green = y + @as(u32, @intCast(greenOffset));
-            var color = (green << 8) | blue;
-            pixel[0] = color;
-            pixel += 1;
-        }
-        row += buffer.*.pitch;
-    }
-}
-
 fn ProcessWindowsError() void {
     var errorMessage = win32.GetLastError();
     std.debug.print("{}", .{errorMessage});
 }
 
 
-fn rdtscp() u64 {
-    var hi: u64 = 0;
-    var low: u64 = 0;
+fn rdtsc() u64 {
+   var low: u64 = undefined;
+    var high: u64 = undefined;
 
-    asm volatile (
-        \\rdtscp
+    asm volatile(
+        "rdtsc"
         : [low] "={eax}" (low),
-          [hi] "={edx}" (hi)
+        [high] "={edx}" (high)        
     );
-    return (@as(u64, hi) << 32) | @as(u64, low);
+
+    return (high << 32) | low;
 }
