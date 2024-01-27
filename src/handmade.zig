@@ -22,6 +22,38 @@ pub const game_sound_output_buffer = struct {
     samplesCount: u32 = undefined,
 };
 
+pub const game_button_state = packed struct {
+    halfTransitionCount: u32 = 0,
+    endedDown: u32 = 0,
+};
+pub const game_controller_input = struct {
+    isAnalog: bool = false,
+
+    startX: f32 = 0,
+    startY: f32 = 0,
+
+    minX: f32 = 0,
+    minY: f32 = 0,
+
+    maxX: f32 = 0,
+    maxY: f32 = 0,
+
+    endX: f32 = 0,
+    endY: f32 = 0,
+    
+    button: packed struct {
+        up: game_button_state,
+        down: game_button_state,
+        left: game_button_state,
+        right: game_button_state,
+        leftShoulder: game_button_state,
+        rightShoulder: game_button_state,
+    },
+};
+pub const game_input = struct {
+    controllers: [4]game_controller_input,
+};
+
 var tSine: f32 = undefined;
 fn GameOutputSound(soundBuffer: *game_sound_output_buffer, toneHz: u32) void {
     const toneVolume: u32 = 3000;
@@ -37,7 +69,7 @@ fn GameOutputSound(soundBuffer: *game_sound_output_buffer, toneHz: u32) void {
         sampleOut[0] = sampleValue;
         sampleOut += @as(usize, 1);
 
-        tSine += 2.0 * math.pi * 1.0 / @as(f32, @floatFromInt(wavePeriod));
+        tSine += (2.0 * math.pi * 1.0) / @as(f32, @floatFromInt(wavePeriod));
     }
 }
 fn RenderWeirdGradient(buffer: *game_offscreen_buffer, blueOffset: i32, greenOffset: i32) void {
@@ -49,9 +81,10 @@ fn RenderWeirdGradient(buffer: *game_offscreen_buffer, blueOffset: i32, greenOff
         while (x < buffer.*.width) : (x += 1) {
             //
             // Pixel in memory: 00 00 00 00
-
+            @setRuntimeSafety(false);
             const blue = x + @as(u32, @intCast(blueOffset));
             const green = y + @as(u32, @intCast(greenOffset));
+            @setRuntimeSafety(true);
             var color = (green << 8) | blue;
             pixel[0] = color;
             pixel += 1;
@@ -59,8 +92,30 @@ fn RenderWeirdGradient(buffer: *game_offscreen_buffer, blueOffset: i32, greenOff
         row += buffer.*.pitch;
     }
 }
-pub fn GameUpdateAndRender(buffer: *game_offscreen_buffer, blueOffset: i32, greenOffset: i32, soundbuffer: *game_sound_output_buffer, toneHz: u32) void {
+
+
+pub fn GameUpdateAndRender(buffer: *game_offscreen_buffer, soundbuffer: *game_sound_output_buffer, input: *game_input) void {
+    
+    const state = struct {
+        var blueOffset:i32 = 0;
+        var greenOffset:i32 = 0;
+        var toneHz:u32 = 256;
+    };
+    
+    const input0: game_controller_input = input.controllers[0];
+    if (input0.isAnalog) {
+        //NOTE(rosh): Use analog movement tuning
+        state.blueOffset += @intFromFloat(4.0 * input0.endX);
+        // state.toneHz += 256 + @as(u32, @intFromFloat(120.0 * input0.endY));
+    } else {
+        //NOTE(rosh): Use digital movement tuning
+    }
+
+    if (input0.button.down.endedDown != 0) {
+        state.greenOffset += 1;
+    }
+
     //TODO(rosh): Allow sample offsets here for more robust platform options
-    GameOutputSound(soundbuffer, toneHz);
-    RenderWeirdGradient(buffer, blueOffset, greenOffset);
+    GameOutputSound(soundbuffer, state.toneHz);
+    RenderWeirdGradient(buffer, state.blueOffset, state.greenOffset);
 }
