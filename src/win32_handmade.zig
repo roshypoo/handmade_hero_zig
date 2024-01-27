@@ -13,9 +13,8 @@
 /// - Blit speed improvements (BitBlit)
 /// - Hardware acceleration (OpenGL or Direct3d or BOTH??)
 /// - GetKeyboardLayout (International WASD support)
-/// 
+///
 /// Just a partial list of stuff!!!
-
 pub const UNICODE = true;
 
 const WINAPI = @import("std").os.windows.WINAPI;
@@ -24,7 +23,6 @@ const handmade = @import("handmade.zig");
 const log = std.log.info;
 
 // TODO(rosh): Implement sine ourselves.
-const math = std.math;
 
 const win32 = struct {
     usingnamespace @import("win32").zig;
@@ -207,7 +205,53 @@ fn Win32LoadXinput() void {
     }
 }
 
-fn Win32FillSoundBuffer(soundOutput: *Win32SoundOutput, bytesToLock: u32, bytesToWrite: u32) void {
+fn Win32ClearBuffer(soundOutput: *Win32SoundOutput) void {
+    var region1: ?*anyopaque = undefined;
+    var region1Size: u32 = undefined;
+    var region2: ?*anyopaque = undefined;
+    var region2Size: u32 = undefined;
+    if (win32.SUCCEEDED(globalSoundSecondaryBuffer.*.vtable.Lock(
+        globalSoundSecondaryBuffer,
+        0,
+        soundOutput.secondaryBufferSize,
+        &region1,
+        &region1Size,
+        &region2,
+        &region2Size,
+        0,
+    ))) {
+        if (region1) |ptr| {
+            var destSample: [*]i16 = @ptrCast(@alignCast(ptr));
+            var byteIndex: u32 = undefined;
+            while (byteIndex < region1Size) : (byteIndex += 1) {
+                destSample[0] = 0;
+                destSample += @as(usize, 1);
+            }
+        }
+        if (region2) |ptr| {
+            var destSample: [*]i16 = @ptrCast(@alignCast(ptr));
+            var byteIndex: u32 = undefined;
+            while (byteIndex < region2Size) : (byteIndex += 1) {
+                destSample[0] = 0;
+                destSample += @as(usize, 1);
+            }
+        }
+        _ = globalSoundSecondaryBuffer.vtable.Unlock(
+            globalSoundSecondaryBuffer,
+            region1,
+            region1Size,
+            region2,
+            region2Size,
+        );
+    }
+}
+
+fn Win32FillSoundBuffer(
+    soundOutput: *Win32SoundOutput,
+    bytesToLock: u32,
+    bytesToWrite: u32,
+    sourceBuffer: *handmade.game_sound_output_buffer,
+) void {
     var region1: ?*anyopaque = undefined;
     var region1Size: u32 = undefined;
     var region2: ?*anyopaque = undefined;
@@ -225,43 +269,47 @@ fn Win32FillSoundBuffer(soundOutput: *Win32SoundOutput, bytesToLock: u32, bytesT
     ))) {
         //TODO(rosh): Assert that region1Size/region2Size is valid
         if (region1) |ptr| {
-            var sampleOut: [*]i16 = @ptrCast(@alignCast(ptr));
+            var destSample: [*]i16 = @ptrCast(@alignCast(ptr));
+            var sourceSample = sourceBuffer.samples;
             const region1SampleCount = region1Size / soundOutput.bytesPerSample;
             for (0..region1SampleCount) |_| {
-                const sineValue = math.sin(soundOutput.tSine);
-                const sampleValue: i16 = @intFromFloat(sineValue * @as(f32, @floatFromInt(soundOutput.toneVolume)));
-
-                sampleOut[0] = sampleValue;
-                sampleOut += @as(usize, 1);
-                sampleOut[0] = sampleValue;
-                sampleOut += @as(usize, 1);
+                destSample[0] = sourceSample[0];
+                destSample += @as(usize, 1);
+                sourceSample += @as(usize, 1);
+                destSample[0] = sourceSample[0];
+                destSample += @as(usize, 1);
+                sourceSample += @as(usize, 1);
                 soundOutput.runningSampleIndex += 1;
-                soundOutput.tSine += 2.0 * math.pi * 1.0 / @as(f32, @floatFromInt(soundOutput.wavePeriod));
             }
         }
         if (region2) |ptr| {
+            var destSample: [*]i16 = @ptrCast(@alignCast(ptr));
+            var sourceSample = sourceBuffer.samples;
             const region2SampleCount = region2Size / soundOutput.bytesPerSample;
-            var sampleOut: [*]i16 = @ptrCast(@alignCast(ptr));
             for (0..region2SampleCount) |_| {
-                const sineValue = math.sin(soundOutput.tSine);
-                const sampleValue: i16 = @intFromFloat(sineValue * @as(f32, @floatFromInt(soundOutput.toneVolume)));
-                sampleOut[0] = sampleValue;
-                sampleOut += @as(usize, 1);
-                sampleOut[0] = sampleValue;
-                sampleOut += @as(usize, 1);
+                destSample[0] = sourceSample[0];
+                destSample += @as(usize, 1);
+                sourceSample += @as(usize, 1);
+                destSample[0] = sourceSample[0];
+                destSample += @as(usize, 1);
+                sourceSample += @as(usize, 1);
                 soundOutput.runningSampleIndex += 1;
-                soundOutput.tSine += 2.0 * math.pi * 1.0 / @as(f32, @floatFromInt(soundOutput.wavePeriod));
             }
         }
+        _ = globalSoundSecondaryBuffer.vtable.Unlock(
+            globalSoundSecondaryBuffer,
+            region1,
+            region1Size,
+            region2,
+            region2Size,
+        );
     }
 }
 
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32) callconv(WINAPI) c_int {
-    
     var perfCountFrequencyResult: win32.LARGE_INTEGER = undefined;
     _ = win32.QueryPerformanceFrequency(&perfCountFrequencyResult);
     const perfCountFrequency = perfCountFrequencyResult.QuadPart;
-
 
     Win32LoadXinput();
     Win32ResizeDIBSection(&globalBackbuffer, 1200, 720);
@@ -280,7 +328,6 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
         .lpszMenuName = null,
         .lpszClassName = win32.L("HandmadeHeroWindowClass"),
     };
-
 
     if (win32.RegisterClass(&WindowClass) > 0) {
         const windowHandle = win32.CreateWindowEx(
@@ -319,23 +366,20 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
             soundOutput.latencySampleCount = soundOutput.samplesPerSecond / 15;
 
-
             Win32InitDirectSound(
                 windowHandle,
                 soundOutput.secondaryBufferSize,
                 soundOutput.samplesPerSecond,
             );
-            Win32FillSoundBuffer(
+            Win32ClearBuffer(
                 &soundOutput,
-                0,
-                soundOutput.latencySampleCount * soundOutput.bytesPerSample,
             );
             _ = globalSoundSecondaryBuffer.vtable.Play(globalSoundSecondaryBuffer, 0, 0, win32.DSBPLAY_LOOPING);
 
-             var lastCounter: win32.LARGE_INTEGER = undefined;
+            var lastCounter: win32.LARGE_INTEGER = undefined;
             _ = win32.QueryPerformanceCounter(&lastCounter);
             var lastCycleCount: u64 = rdtsc();
-            
+
             running = true;
             while (running) {
                 var message: win32.MSG = undefined;
@@ -385,32 +429,62 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     }
                 }
 
-                var gameOffscreenBuffer = handmade.game_offscreen_buffer{
-                    .memory = globalBackbuffer.memory,
-                    .bytesPerPixel = globalBackbuffer.bytesPerPixel,
-                    .height = globalBackbuffer.height,
-                    .width = globalBackbuffer.width,
-                    .pitch = globalBackbuffer.pitch
-                };
-               
-                handmade.GameUpdateAndRender(&gameOffscreenBuffer,xOffset, yOffset);
-
                 // TODO(rosh): DirectSound output test
-                var playCursor: u32 = undefined;
-                var writeCursor: u32 = undefined;
-                if (win32.SUCCEEDED(globalSoundSecondaryBuffer.vtable.GetCurrentPosition(globalSoundSecondaryBuffer, &playCursor, &writeCursor))) {
-                    const byteToLock: u32 = (soundOutput.runningSampleIndex * soundOutput.bytesPerSample) % soundOutput.secondaryBufferSize;
+                var byteToLock: u32 = 0;
+                var playCursor: u32 = 0;
+                var writeCursor: u32 = 0;
+                var bytesToWrite: u32 = 0;
+                var targetCursor: u32 = 0;
 
-                    var targetCursor = (playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.secondaryBufferSize;
-                    var bytesToWrite: u32 = undefined;
+                var isSouldValid: bool = false;
+                //TODO(rosh): Tighten up sound logic so that we know where we should be writing to
+                // and can anticipate the time spent in game update
+                if (win32.SUCCEEDED(globalSoundSecondaryBuffer.vtable.GetCurrentPosition(globalSoundSecondaryBuffer, &playCursor, &writeCursor))) {
+                    isSouldValid = true;
+                    byteToLock = (soundOutput.runningSampleIndex * soundOutput.bytesPerSample) % soundOutput.secondaryBufferSize;
+
+                    targetCursor = (playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.secondaryBufferSize;
                     if (byteToLock > targetCursor) {
                         bytesToWrite = soundOutput.secondaryBufferSize - byteToLock;
                         bytesToWrite += targetCursor;
                     } else {
                         bytesToWrite = targetCursor - byteToLock;
                     }
+                }
+                //TODO(rosh): Pool with bitmap virtual alloc.
+                var samples: [*]i16 = @ptrCast(@alignCast(win32.VirtualAlloc(
+                    null,
+                    soundOutput.secondaryBufferSize,
+                    win32.VIRTUAL_ALLOCATION_TYPE.COMMIT,
+                    win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+                )));
+                var soundBuffer = handmade.game_sound_output_buffer{};
+                soundBuffer.samplesPerSecond = soundOutput.samplesPerSecond;
+                soundBuffer.samplesCount = bytesToWrite / soundOutput.bytesPerSample;
+                soundBuffer.samples = samples;
 
-                    Win32FillSoundBuffer(&soundOutput, byteToLock, bytesToWrite);
+                var gameOffscreenBuffer = handmade.game_offscreen_buffer{
+                    .memory = globalBackbuffer.memory,
+                    .bytesPerPixel = globalBackbuffer.bytesPerPixel,
+                    .height = globalBackbuffer.height,
+                    .width = globalBackbuffer.width,
+                    .pitch = globalBackbuffer.pitch,
+                };
+
+                handmade.GameUpdateAndRender(
+                    &gameOffscreenBuffer,
+                    xOffset,
+                    yOffset,
+                    &soundBuffer,
+                    soundOutput.toneHz,
+                );
+                if (isSouldValid) {
+                    Win32FillSoundBuffer(
+                        &soundOutput,
+                        byteToLock,
+                        bytesToWrite,
+                        &soundBuffer,
+                    );
                 }
 
                 var deviceContext = win32.GetDC(windowHandle);
@@ -430,7 +504,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
 
                 var endCounter: win32.LARGE_INTEGER = undefined;
                 _ = win32.QueryPerformanceCounter(&endCounter);
-                
+
                 // TODO(rosh): Display the value here
                 const cyclesElapsed: u64 = endCycleCount - lastCycleCount;
                 const counterElapsed: f64 = @floatFromInt(endCounter.QuadPart - lastCounter.QuadPart);
@@ -438,7 +512,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                 const fps: f32 = @floatCast(@as(f64, @floatFromInt(perfCountFrequency)) / counterElapsed);
                 const mcpf: f32 = @floatCast(@as(f64, @floatFromInt(cyclesElapsed)) / (1000 * 1000));
 
-                std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{msPerFrame, fps, mcpf});
+                std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{ msPerFrame, fps, mcpf });
                 lastCounter = endCounter;
                 lastCycleCount = endCycleCount;
             }
@@ -605,15 +679,13 @@ fn ProcessWindowsError() void {
     std.debug.print("{}", .{errorMessage});
 }
 
-
 fn rdtsc() u64 {
-   var low: u64 = undefined;
+    var low: u64 = undefined;
     var high: u64 = undefined;
 
-    asm volatile(
-        "rdtsc"
+    asm volatile ("rdtsc"
         : [low] "={eax}" (low),
-        [high] "={edx}" (high)        
+          [high] "={edx}" (high),
     );
 
     return (high << 32) | low;
