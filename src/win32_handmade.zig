@@ -71,22 +71,16 @@ const Win32WindowDimension = struct {
 
 const Win32SoundOutput = struct {
     samplesPerSecond: u32 = undefined,
-    toneHz: u32 = undefined,
-    toneVolume: u16 = undefined,
     runningSampleIndex: u32 = undefined,
-    wavePeriod: u32 = undefined,
     bytesPerSample: u32 = undefined,
     secondaryBufferSize: u32 = undefined,
     latencySampleCount: u32 = undefined,
     tSine: f32 = undefined,
 
-    fn create(samplesPerSecond: u32, toneHz: u32, toneVolume: u16, bytesPerSample: u32) Win32SoundOutput {
+    fn create(samplesPerSecond: u32, bytesPerSample: u32) Win32SoundOutput {
         return Win32SoundOutput{
             .samplesPerSecond = samplesPerSecond,
-            .toneHz = toneHz,
-            .toneVolume = toneVolume,
             .runningSampleIndex = 0,
-            .wavePeriod = samplesPerSecond / toneHz,
             .bytesPerSample = bytesPerSample,
             .secondaryBufferSize = samplesPerSecond * bytesPerSample,
         };
@@ -164,6 +158,8 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                                 //TODO(rosh): Diagnostic
                             }
                         }
+                    } else {
+                        //TODO(rosh): Diagnostic
                     }
                 } else {
                     //TODO(rosh): Diagnostic
@@ -180,8 +176,8 @@ fn Win32InitDirectSound(windowHandle: ?HWND, bufferSize: u32, samplesPerSecond: 
                 if (win32.SUCCEEDED(directSound.vtable.CreateSoundBuffer(directSound, &bufferDescription, &secondaryBuffer, null))) {
                     if (secondaryBuffer) |sb| {
                         globalSoundSecondaryBuffer = sb;
+                        win32.OutputDebugStringA("secondary buffer created successfully");
                     }
-                    win32.OutputDebugStringA("secondary buffer created successfully");
                 }
             }
         } else {
@@ -306,10 +302,15 @@ fn Win32FillSoundBuffer(
     }
 }
 
+fn Win32ProcessDigitalXinputButton(xInputButtonState: u32, newState: *handmade.game_button_state, buttonBit: u32, oldState: *handmade.game_button_state) void {
+    newState.halfTransitionCount = if (oldState.endedDown != newState.endedDown) 1 else 0;
+    newState.endedDown = if ((xInputButtonState & buttonBit) == buttonBit) 1 else 0;
+}
+
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32) callconv(WINAPI) c_int {
-    var perfCountFrequencyResult: win32.LARGE_INTEGER = undefined;
-    _ = win32.QueryPerformanceFrequency(&perfCountFrequencyResult);
-    const perfCountFrequency = perfCountFrequencyResult.QuadPart;
+    // var perfCountFrequencyResult: win32.LARGE_INTEGER = undefined;
+    // _ = win32.QueryPerformanceFrequency(&perfCountFrequencyResult);
+    // const perfCountFrequency = perfCountFrequencyResult.QuadPart;
 
     Win32LoadXinput();
     Win32ResizeDIBSection(&globalBackbuffer, 1200, 720);
@@ -317,6 +318,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
         .style = win32.WNDCLASS_STYLES.initFlags(.{
             .HREDRAW = 1,
             .VREDRAW = 1,
+            .OWNDC = 1,
         }),
         .lpfnWndProc = WindowProc,
         .cbClsExtra = 0,
@@ -351,17 +353,11 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
         );
 
         if (windowHandle != null) {
-            // NOTE(rosh): Graphics test
-            var xOffset: i32 = 0;
-            var yOffset: i32 = 0;
 
             // NOTE(rosh): Sound test
             var soundOutput = Win32SoundOutput{};
             soundOutput.samplesPerSecond = 48000;
-            soundOutput.toneHz = 256;
-            soundOutput.toneVolume = 1000;
             soundOutput.runningSampleIndex = 0;
-            soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
             soundOutput.bytesPerSample = @sizeOf(u16) * 2;
             soundOutput.secondaryBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
             soundOutput.latencySampleCount = soundOutput.samplesPerSecond / 15;
@@ -376,11 +372,39 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             );
             _ = globalSoundSecondaryBuffer.vtable.Play(globalSoundSecondaryBuffer, 0, 0, win32.DSBPLAY_LOOPING);
 
-            var lastCounter: win32.LARGE_INTEGER = undefined;
-            _ = win32.QueryPerformanceCounter(&lastCounter);
-            var lastCycleCount: u64 = rdtsc();
+            // var lastCounter: win32.LARGE_INTEGER = undefined;
+            // _ = win32.QueryPerformanceCounter(&lastCounter);
+            // var lastCycleCount: u64 = rdtsc();
 
             running = true;
+
+            //TODO(rosh): Pool with bitmap virtual alloc.
+            var samples: [*]i16 = @ptrCast(@alignCast(win32.VirtualAlloc(
+                null,
+                soundOutput.secondaryBufferSize,
+                win32.VIRTUAL_ALLOCATION_TYPE.COMMIT,
+                win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+            )));
+
+            var input = [1]handmade.game_input{
+                handmade.game_input{
+                    .controllers = [1]handmade.game_controller_input{
+                        handmade.game_controller_input{
+                            .button = .{
+                                .up = handmade.game_button_state{},
+                                .down = handmade.game_button_state{},
+                                .left = handmade.game_button_state{},
+                                .right = handmade.game_button_state{},
+                                .leftShoulder = handmade.game_button_state{},
+                                .rightShoulder = handmade.game_button_state{},
+                            },
+                        },
+                    } ** 4,
+                },
+            } ** 2;
+            var oldInput = &input[0];
+            var newInput = &input[1];
+
             while (running) {
                 var message: win32.MSG = undefined;
                 while (win32.PeekMessage(
@@ -398,34 +422,86 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                 }
 
                 var controllerIndex: u32 = 0;
+                var maxControllerCount = win32.XUSER_MAX_COUNT;
+                if (maxControllerCount > input.len) {
+                    maxControllerCount = input.len;
+                }
                 while (controllerIndex < win32.XUSER_MAX_COUNT) : (controllerIndex += 1) {
+                    const oldController = &oldInput.controllers[controllerIndex];
+                    const newController = &newInput.controllers[controllerIndex];
                     var controllerState: win32.XINPUT_STATE = undefined;
                     if (XinputGetState(controllerIndex, &controllerState) == @intFromEnum(win32.WIN32_ERROR.NO_ERROR)) {
                         // NOTE(rosh): The controller is plugged in.
                         // TODO(rosh): see if controllerState.dwPacketNumber increments too rapidly.
                         const pad: *win32.XINPUT_GAMEPAD = &controllerState.Gamepad;
-                        const up: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
-                        const down: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-                        const left: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-                        const right: bool = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
-                        const start: bool = pad.wButtons & win32.XINPUT_GAMEPAD_START != 0;
-                        const back: bool = pad.wButtons & win32.XINPUT_GAMEPAD_BACK != 0;
-                        const leftShoulder: bool = pad.*.wButtons & win32.XINPUT_GAMEPAD_LEFT_SHOULDER != 0;
-                        const rightShoulder: bool = pad.wButtons & win32.XINPUT_GAMEPAD_RIGHT_SHOULDER != 0;
-                        const a: bool = pad.wButtons & win32.XINPUT_GAMEPAD_A != 0;
-                        const b: bool = pad.wButtons & win32.XINPUT_GAMEPAD_B != 0;
-                        const x: bool = pad.wButtons & win32.XINPUT_GAMEPAD_X != 0;
-                        const y: bool = pad.wButtons & win32.XINPUT_GAMEPAD_Y != 0;
 
-                        const stickX = pad.sThumbLX;
-                        const stickY = pad.sThumbLY;
-                        //TODO(rosh): Need to handle joystick deadzone.
-                        xOffset += @divTrunc(stickX, 4096);
-                        yOffset += @divTrunc(stickY, 4096);
+                        // const up: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
+                        // const down: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+                        // const left: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+                        // const right: bool = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
+                        newController.isAnalog = true;
+                        var x: f32 = 0;
+                        if (pad.sThumbLX < 0) {
+                            x = @as(f32, @floatFromInt(pad.sThumbLX)) / 32768.0;
+                        } else {
+                            x = @as(f32, @floatFromInt(pad.sThumbLX)) / 32767.0;
+                        }
+                        newController.startX = oldController.endX;
+                        newController.startY = oldController.endY;
 
-                        // soundOutput.toneHz = 512 * 256 * @as(u32, @intCast(@divTrunc(stickY, 32000)));
-                        // soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
-                        _ = [_]bool{ up, down, left, right, start, back, leftShoulder, rightShoulder, a, b, x, y };
+                        newController.minX = x;
+                        newController.maxX = x;
+                        newController.endX = x;
+
+                        var y: f32 = 0;
+                        if (pad.sThumbLY < 0) {
+                            y = @as(f32, @floatFromInt(pad.sThumbLY)) / 32768.0;
+                        } else {
+                            y = @as(f32, @floatFromInt(pad.sThumbLY)) / 32767.0;
+                        }
+                        newController.minY = y;
+                        newController.maxY = y;
+                        newController.endY = y;
+
+                        //TODO(rosh): We will do deadzone handling later using
+                        // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+                        // XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE
+                        Win32ProcessDigitalXinputButton(
+                            pad.wButtons,
+                            @ptrCast(&newController.button.down),
+                            win32.XINPUT_GAMEPAD_A,
+                            @ptrCast(&oldController.button.down),
+                        );
+                        Win32ProcessDigitalXinputButton(
+                            pad.wButtons,
+                            @ptrCast(&newController.button.right),
+                            win32.XINPUT_GAMEPAD_B,
+                            @ptrCast(&oldController.button.right),
+                        );
+                        Win32ProcessDigitalXinputButton(
+                            pad.wButtons,
+                            @ptrCast(&newController.button.left),
+                            win32.XINPUT_GAMEPAD_X,
+                            @ptrCast(&oldController.button.left),
+                        );
+                        Win32ProcessDigitalXinputButton(
+                            pad.wButtons,
+                            @ptrCast(&newController.button.leftShoulder),
+                            win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
+                            @ptrCast(&oldController.button.leftShoulder),
+                        );
+                        Win32ProcessDigitalXinputButton(
+                            pad.wButtons,
+                            @ptrCast(&newController.button.rightShoulder),
+                            win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
+                            @ptrCast(&oldController.button.rightShoulder),
+                        );
+                        Win32ProcessDigitalXinputButton(
+                            pad.wButtons,
+                            @ptrCast(&newController.button.up),
+                            win32.XINPUT_GAMEPAD_Y,
+                            @ptrCast(&oldController.button.up),
+                        );
                     }
                 }
 
@@ -451,33 +527,20 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         bytesToWrite = targetCursor - byteToLock;
                     }
                 }
-                //TODO(rosh): Pool with bitmap virtual alloc.
-                var samples: [*]i16 = @ptrCast(@alignCast(win32.VirtualAlloc(
-                    null,
-                    soundOutput.secondaryBufferSize,
-                    win32.VIRTUAL_ALLOCATION_TYPE.COMMIT,
-                    win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
-                )));
-                var soundBuffer = handmade.game_sound_output_buffer{};
-                soundBuffer.samplesPerSecond = soundOutput.samplesPerSecond;
-                soundBuffer.samplesCount = bytesToWrite / soundOutput.bytesPerSample;
-                soundBuffer.samples = samples;
+                var soundBuffer = handmade.game_sound_output_buffer{
+                    .samplesPerSecond = soundOutput.samplesPerSecond,
+                    .samplesCount = bytesToWrite / soundOutput.bytesPerSample,
+                    .samples = samples,
+                };
 
                 var gameOffscreenBuffer = handmade.game_offscreen_buffer{
                     .memory = globalBackbuffer.memory,
-                    .bytesPerPixel = globalBackbuffer.bytesPerPixel,
                     .height = globalBackbuffer.height,
                     .width = globalBackbuffer.width,
                     .pitch = globalBackbuffer.pitch,
                 };
 
-                handmade.GameUpdateAndRender(
-                    &gameOffscreenBuffer,
-                    xOffset,
-                    yOffset,
-                    &soundBuffer,
-                    soundOutput.toneHz,
-                );
+                handmade.GameUpdateAndRender(&gameOffscreenBuffer, &soundBuffer, newInput);
                 if (isSouldValid) {
                     Win32FillSoundBuffer(
                         &soundOutput,
@@ -500,21 +563,26 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     );
                 }
 
-                const endCycleCount = rdtsc();
+                // const endCycleCount = rdtsc();
 
-                var endCounter: win32.LARGE_INTEGER = undefined;
-                _ = win32.QueryPerformanceCounter(&endCounter);
+                // var endCounter: win32.LARGE_INTEGER = undefined;
+                // _ = win32.QueryPerformanceCounter(&endCounter);
 
                 // TODO(rosh): Display the value here
-                const cyclesElapsed: u64 = endCycleCount - lastCycleCount;
-                const counterElapsed: f64 = @floatFromInt(endCounter.QuadPart - lastCounter.QuadPart);
-                const msPerFrame: f32 = @floatCast((1000 * counterElapsed) / @as(f64, @floatFromInt(perfCountFrequency)));
-                const fps: f32 = @floatCast(@as(f64, @floatFromInt(perfCountFrequency)) / counterElapsed);
-                const mcpf: f32 = @floatCast(@as(f64, @floatFromInt(cyclesElapsed)) / (1000 * 1000));
+                // const cyclesElapsed: u64 = endCycleCount - lastCycleCount;
+                // const counterElapsed: f64 = @floatFromInt(endCounter.QuadPart - lastCounter.QuadPart);
+                // const msPerFrame: f32 = @floatCast((1000 * counterElapsed) / @as(f64, @floatFromInt(perfCountFrequency)));
+                // const fps: f32 = @floatCast(@as(f64, @floatFromInt(perfCountFrequency)) / counterElapsed);
+                // const mcpf: f32 = @floatCast(@as(f64, @floatFromInt(cyclesElapsed)) / (1000 * 1000));
 
-                std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{ msPerFrame, fps, mcpf });
-                lastCounter = endCounter;
-                lastCycleCount = endCycleCount;
+                // std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{ msPerFrame, fps, mcpf });
+                // lastCounter = endCounter;
+                // lastCycleCount = endCycleCount;
+
+                const temp = newInput;
+                newInput = oldInput;
+                oldInput = temp;
+                // TODO(rosh): Should we clear these??
             }
         } else {
             ProcessWindowsError();
@@ -638,7 +706,7 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
     //TODO(rosh): Bulletproof this.
     // Maybe don't free first, free after, then free first if that fails.
 
-    if (buffer.*.memory != null) {
+    if (buffer.memory != null) {
         _ = win32.VirtualFree(
             buffer.*.memory,
             0,
@@ -646,13 +714,13 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
         );
     }
 
-    buffer.*.width = width;
-    buffer.*.height = height;
+    buffer.width = width;
+    buffer.height = height;
 
-    buffer.*.info = win32.BITMAPINFO{ .bmiHeader = win32.BITMAPINFOHEADER{
+    buffer.info = win32.BITMAPINFO{ .bmiHeader = win32.BITMAPINFOHEADER{
         .biSize = @sizeOf(win32.BITMAPINFOHEADER),
-        .biWidth = buffer.*.width,
-        .biHeight = -buffer.*.height,
+        .biWidth = buffer.width,
+        .biHeight = -buffer.height,
         .biPlanes = 1,
         .biBitCount = 32,
         .biCompression = win32.BI_RGB,
@@ -663,15 +731,15 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
         .biClrImportant = 0,
     }, .bmiColors = [1]win32.RGBQUAD{win32.RGBQUAD{ .rgbBlue = 0, .rgbGreen = 0, .rgbRed = 0, .rgbReserved = 0 }} };
 
-    var bitmapMemorySize: usize = @as(usize, @intCast((buffer.*.width * buffer.*.height) * buffer.*.bytesPerPixel));
+    var bitmapMemorySize: usize = @as(usize, @intCast((buffer.width * buffer.height) * buffer.bytesPerPixel));
 
-    buffer.*.memory = win32.VirtualAlloc(
+    buffer.memory = win32.VirtualAlloc(
         null,
         bitmapMemorySize,
         win32.VIRTUAL_ALLOCATION_TYPE.COMMIT,
         win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
     );
-    buffer.*.pitch = @intCast((buffer.*.bytesPerPixel * width));
+    buffer.pitch = @intCast((buffer.bytesPerPixel * width));
 }
 
 fn ProcessWindowsError() void {
