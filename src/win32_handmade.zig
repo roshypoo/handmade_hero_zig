@@ -40,6 +40,8 @@ const win32 = struct {
     usingnamespace @import("win32").media.audio;
     usingnamespace @import("win32").system.performance;
 };
+const IGNORE = @import("build_consts").IGNORE;
+const HANDMADE_INTERNAL = (@import("builtin").mode == std.builtin.Mode.Debug);
 const L = win32.L;
 const HINSTANCE = win32.HINSTANCE;
 const HWND = win32.HWND;
@@ -372,218 +374,236 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             );
             _ = globalSoundSecondaryBuffer.vtable.Play(globalSoundSecondaryBuffer, 0, 0, win32.DSBPLAY_LOOPING);
 
-            // var lastCounter: win32.LARGE_INTEGER = undefined;
-            // _ = win32.QueryPerformanceCounter(&lastCounter);
-            // var lastCycleCount: u64 = rdtsc();
-
-            running = true;
-
             //TODO(rosh): Pool with bitmap virtual alloc.
-            var samples: [*]i16 = @ptrCast(@alignCast(win32.VirtualAlloc(
+            const gameMemoryStorageSize = handmade.Megabytes(64);
+            const transientMemoryStorageSize = handmade.Gigabytes(4);
+
+            //TODO(rosh): Fix this.the programming crashes when trying to pass baseAddress to virtualalloc.
+            // const baseAddress: ?[*]u8 =  if (HANDMADE_INTERNAL) @ptrFromInt(handmade.Terabytes(2)) else null;
+            const totalSize = gameMemoryStorageSize+transientMemoryStorageSize;
+
+            if (@as(?[*]i16, @ptrCast(@alignCast(win32.VirtualAlloc(
                 null,
                 soundOutput.secondaryBufferSize,
                 win32.VIRTUAL_ALLOCATION_TYPE.COMMIT,
                 win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
-            )));
-
-            var input = [1]handmade.game_input{
-                handmade.game_input{
-                    .controllers = [1]handmade.game_controller_input{
-                        handmade.game_controller_input{
-                            .button = .{
-                                .up = handmade.game_button_state{},
-                                .down = handmade.game_button_state{},
-                                .left = handmade.game_button_state{},
-                                .right = handmade.game_button_state{},
-                                .leftShoulder = handmade.game_button_state{},
-                                .rightShoulder = handmade.game_button_state{},
-                            },
-                        },
-                    } ** 4,
-                },
-            } ** 2;
-            var oldInput = &input[0];
-            var newInput = &input[1];
-
-            while (running) {
-                var message: win32.MSG = undefined;
-                while (win32.PeekMessage(
-                    &message,
+            ))))) |samples| {
+                if (@as(?[*]u8, @ptrCast(@alignCast(win32.VirtualAlloc(
                     null,
-                    0,
-                    0,
-                    win32.PEEK_MESSAGE_REMOVE_TYPE.initFlags(.{ .REMOVE = 1 }),
-                ) > 0) {
-                    if (message.message == win32.WM_QUIT) {
-                        running = false;
-                    }
-                    _ = win32.TranslateMessage(&message);
-                    _ = win32.DispatchMessage(&message);
-                }
+                    totalSize,
+                    win32.VIRTUAL_ALLOCATION_TYPE.COMMIT,
+                    win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+                ))))) |memory| {
+                    var gameMemory = handmade.game_memory{
+                            .permanentStorageSize = gameMemoryStorageSize,
+                            .permanentStorage = memory,
+                            .transientStorageSize = transientMemoryStorageSize,
+                            .transientStorage = memory+gameMemoryStorageSize
+                        };
 
-                var controllerIndex: u32 = 0;
-                var maxControllerCount = win32.XUSER_MAX_COUNT;
-                if (maxControllerCount > input.len) {
-                    maxControllerCount = input.len;
-                }
-                while (controllerIndex < win32.XUSER_MAX_COUNT) : (controllerIndex += 1) {
-                    const oldController = &oldInput.controllers[controllerIndex];
-                    const newController = &newInput.controllers[controllerIndex];
-                    var controllerState: win32.XINPUT_STATE = undefined;
-                    if (XinputGetState(controllerIndex, &controllerState) == @intFromEnum(win32.WIN32_ERROR.NO_ERROR)) {
-                        // NOTE(rosh): The controller is plugged in.
-                        // TODO(rosh): see if controllerState.dwPacketNumber increments too rapidly.
-                        const pad: *win32.XINPUT_GAMEPAD = &controllerState.Gamepad;
+                        var input = [1]handmade.game_input{
+                            handmade.game_input{
+                                .controllers = [1]handmade.game_controller_input{
+                                    handmade.game_controller_input{
+                                        .button = .{
+                                            .up = handmade.game_button_state{},
+                                            .down = handmade.game_button_state{},
+                                            .left = handmade.game_button_state{},
+                                            .right = handmade.game_button_state{},
+                                            .leftShoulder = handmade.game_button_state{},
+                                            .rightShoulder = handmade.game_button_state{},
+                                        },
+                                    },
+                                } ** 4,
+                            },
+                        } ** 2;
+                        var oldInput = &input[0];
+                        var newInput = &input[1];
 
-                        // const up: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
-                        // const down: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-                        // const left: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-                        // const right: bool = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
-                        newController.isAnalog = true;
-                        var x: f32 = 0;
-                        if (pad.sThumbLX < 0) {
-                            x = @as(f32, @floatFromInt(pad.sThumbLX)) / 32768.0;
-                        } else {
-                            x = @as(f32, @floatFromInt(pad.sThumbLX)) / 32767.0;
+                        // var lastCounter: win32.LARGE_INTEGER = undefined;
+                        // _ = win32.QueryPerformanceCounter(&lastCounter);
+                        // var lastCycleCount: u64 = rdtsc();
+                        running = true;
+                        while (running) {
+                            var message: win32.MSG = undefined;
+                            while (win32.PeekMessage(
+                                &message,
+                                null,
+                                0,
+                                0,
+                                win32.PEEK_MESSAGE_REMOVE_TYPE.initFlags(.{ .REMOVE = 1 }),
+                            ) > 0) {
+                                if (message.message == win32.WM_QUIT) {
+                                    running = false;
+                                }
+                                _ = win32.TranslateMessage(&message);
+                                _ = win32.DispatchMessage(&message);
+                            }
+
+                            var controllerIndex: u32 = 0;
+                            var maxControllerCount = win32.XUSER_MAX_COUNT;
+                            if (maxControllerCount > input.len) {
+                                maxControllerCount = input.len;
+                            }
+                            while (controllerIndex < win32.XUSER_MAX_COUNT) : (controllerIndex += 1) {
+                                const oldController = &oldInput.controllers[controllerIndex];
+                                const newController = &newInput.controllers[controllerIndex];
+                                var controllerState: win32.XINPUT_STATE = undefined;
+                                if (XinputGetState(controllerIndex, &controllerState) == @intFromEnum(win32.WIN32_ERROR.NO_ERROR)) {
+                                    // NOTE(rosh): The controller is plugged in.
+                                    // TODO(rosh): see if controllerState.dwPacketNumber increments too rapidly.
+                                    const pad: *win32.XINPUT_GAMEPAD = &controllerState.Gamepad;
+
+                                    // const up: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0;
+                                    // const down: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+                                    // const left: bool = (pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+                                    // const right: bool = pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_RIGHT != 0;
+                                    newController.isAnalog = true;
+                                    var x: f32 = 0;
+                                    if (pad.sThumbLX < 0) {
+                                        x = @as(f32, @floatFromInt(pad.sThumbLX)) / 32768.0;
+                                    } else {
+                                        x = @as(f32, @floatFromInt(pad.sThumbLX)) / 32767.0;
+                                    }
+                                    newController.startX = oldController.endX;
+                                    newController.startY = oldController.endY;
+
+                                    newController.minX = x;
+                                    newController.maxX = x;
+                                    newController.endX = x;
+
+                                    var y: f32 = 0;
+                                    if (pad.sThumbLY < 0) {
+                                        y = @as(f32, @floatFromInt(pad.sThumbLY)) / 32768.0;
+                                    } else {
+                                        y = @as(f32, @floatFromInt(pad.sThumbLY)) / 32767.0;
+                                    }
+                                    newController.minY = y;
+                                    newController.maxY = y;
+                                    newController.endY = y;
+
+                                    //TODO(rosh): We will do deadzone handling later using
+                                    // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+                                    // XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE
+                                    Win32ProcessDigitalXinputButton(
+                                        pad.wButtons,
+                                        @ptrCast(&newController.button.down),
+                                        win32.XINPUT_GAMEPAD_A,
+                                        @ptrCast(&oldController.button.down),
+                                    );
+                                    Win32ProcessDigitalXinputButton(
+                                        pad.wButtons,
+                                        @ptrCast(&newController.button.right),
+                                        win32.XINPUT_GAMEPAD_B,
+                                        @ptrCast(&oldController.button.right),
+                                    );
+                                    Win32ProcessDigitalXinputButton(
+                                        pad.wButtons,
+                                        @ptrCast(&newController.button.left),
+                                        win32.XINPUT_GAMEPAD_X,
+                                        @ptrCast(&oldController.button.left),
+                                    );
+                                    Win32ProcessDigitalXinputButton(
+                                        pad.wButtons,
+                                        @ptrCast(&newController.button.leftShoulder),
+                                        win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
+                                        @ptrCast(&oldController.button.leftShoulder),
+                                    );
+                                    Win32ProcessDigitalXinputButton(
+                                        pad.wButtons,
+                                        @ptrCast(&newController.button.rightShoulder),
+                                        win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
+                                        @ptrCast(&oldController.button.rightShoulder),
+                                    );
+                                    Win32ProcessDigitalXinputButton(
+                                        pad.wButtons,
+                                        @ptrCast(&newController.button.up),
+                                        win32.XINPUT_GAMEPAD_Y,
+                                        @ptrCast(&oldController.button.up),
+                                    );
+                                }
+                            }
+
+                            // TODO(rosh): DirectSound output test
+                            var byteToLock: u32 = 0;
+                            var playCursor: u32 = 0;
+                            var writeCursor: u32 = 0;
+                            var bytesToWrite: u32 = 0;
+                            var targetCursor: u32 = 0;
+
+                            var isSouldValid: bool = false;
+                            //TODO(rosh): Tighten up sound logic so that we know where we should be writing to
+                            // and can anticipate the time spent in game update
+                            if (win32.SUCCEEDED(globalSoundSecondaryBuffer.vtable.GetCurrentPosition(globalSoundSecondaryBuffer, &playCursor, &writeCursor))) {
+                                isSouldValid = true;
+                                byteToLock = (soundOutput.runningSampleIndex * soundOutput.bytesPerSample) % soundOutput.secondaryBufferSize;
+
+                                targetCursor = (playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.secondaryBufferSize;
+                                if (byteToLock > targetCursor) {
+                                    bytesToWrite = soundOutput.secondaryBufferSize - byteToLock;
+                                    bytesToWrite += targetCursor;
+                                } else {
+                                    bytesToWrite = targetCursor - byteToLock;
+                                }
+                            }
+                            var soundBuffer = handmade.game_sound_output_buffer{
+                                .samplesPerSecond = soundOutput.samplesPerSecond,
+                                .samplesCount = bytesToWrite / soundOutput.bytesPerSample,
+                                .samples = samples,
+                            };
+
+                            var gameOffscreenBuffer = handmade.game_offscreen_buffer{
+                                .memory = globalBackbuffer.memory,
+                                .height = globalBackbuffer.height,
+                                .width = globalBackbuffer.width,
+                                .pitch = globalBackbuffer.pitch,
+                            };
+                            handmade.GameUpdateAndRender(&gameMemory, &gameOffscreenBuffer, &soundBuffer, newInput);
+                            if (isSouldValid) {
+                                Win32FillSoundBuffer(
+                                    &soundOutput,
+                                    byteToLock,
+                                    bytesToWrite,
+                                    &soundBuffer,
+                                );
+                            }
+
+                            var deviceContext = win32.GetDC(windowHandle);
+                            defer _ = win32.ReleaseDC(windowHandle, deviceContext);
+
+                            const windowDimension = Win32WindowDimension.get(windowHandle);
+                            if (deviceContext) |context| {
+                                Win32CopyBufferToWindow(
+                                    &globalBackbuffer,
+                                    context,
+                                    windowDimension.width,
+                                    windowDimension.height,
+                                );
+                            }
+
+                            // const endCycleCount = rdtsc();
+
+                            // var endCounter: win32.LARGE_INTEGER = undefined;
+                            // _ = win32.QueryPerformanceCounter(&endCounter);
+
+                            // TODO(rosh): Display the value here
+                            // const cyclesElapsed: u64 = endCycleCount - lastCycleCount;
+                            // const counterElapsed: f64 = @floatFromInt(endCounter.QuadPart - lastCounter.QuadPart);
+                            // const msPerFrame: f32 = @floatCast((1000 * counterElapsed) / @as(f64, @floatFromInt(perfCountFrequency)));
+                            // const fps: f32 = @floatCast(@as(f64, @floatFromInt(perfCountFrequency)) / counterElapsed);
+                            // const mcpf: f32 = @floatCast(@as(f64, @floatFromInt(cyclesElapsed)) / (1000 * 1000));
+
+                            // std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{ msPerFrame, fps, mcpf });
+                            // lastCounter = endCounter;
+                            // lastCycleCount = endCycleCount;
+
+                            const temp = newInput;
+                            newInput = oldInput;
+                            oldInput = temp;
+                            // TODO(rosh): Should we clear these??
                         }
-                        newController.startX = oldController.endX;
-                        newController.startY = oldController.endY;
-
-                        newController.minX = x;
-                        newController.maxX = x;
-                        newController.endX = x;
-
-                        var y: f32 = 0;
-                        if (pad.sThumbLY < 0) {
-                            y = @as(f32, @floatFromInt(pad.sThumbLY)) / 32768.0;
-                        } else {
-                            y = @as(f32, @floatFromInt(pad.sThumbLY)) / 32767.0;
-                        }
-                        newController.minY = y;
-                        newController.maxY = y;
-                        newController.endY = y;
-
-                        //TODO(rosh): We will do deadzone handling later using
-                        // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
-                        // XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE
-                        Win32ProcessDigitalXinputButton(
-                            pad.wButtons,
-                            @ptrCast(&newController.button.down),
-                            win32.XINPUT_GAMEPAD_A,
-                            @ptrCast(&oldController.button.down),
-                        );
-                        Win32ProcessDigitalXinputButton(
-                            pad.wButtons,
-                            @ptrCast(&newController.button.right),
-                            win32.XINPUT_GAMEPAD_B,
-                            @ptrCast(&oldController.button.right),
-                        );
-                        Win32ProcessDigitalXinputButton(
-                            pad.wButtons,
-                            @ptrCast(&newController.button.left),
-                            win32.XINPUT_GAMEPAD_X,
-                            @ptrCast(&oldController.button.left),
-                        );
-                        Win32ProcessDigitalXinputButton(
-                            pad.wButtons,
-                            @ptrCast(&newController.button.leftShoulder),
-                            win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
-                            @ptrCast(&oldController.button.leftShoulder),
-                        );
-                        Win32ProcessDigitalXinputButton(
-                            pad.wButtons,
-                            @ptrCast(&newController.button.rightShoulder),
-                            win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
-                            @ptrCast(&oldController.button.rightShoulder),
-                        );
-                        Win32ProcessDigitalXinputButton(
-                            pad.wButtons,
-                            @ptrCast(&newController.button.up),
-                            win32.XINPUT_GAMEPAD_Y,
-                            @ptrCast(&oldController.button.up),
-                        );
-                    }
-                }
-
-                // TODO(rosh): DirectSound output test
-                var byteToLock: u32 = 0;
-                var playCursor: u32 = 0;
-                var writeCursor: u32 = 0;
-                var bytesToWrite: u32 = 0;
-                var targetCursor: u32 = 0;
-
-                var isSouldValid: bool = false;
-                //TODO(rosh): Tighten up sound logic so that we know where we should be writing to
-                // and can anticipate the time spent in game update
-                if (win32.SUCCEEDED(globalSoundSecondaryBuffer.vtable.GetCurrentPosition(globalSoundSecondaryBuffer, &playCursor, &writeCursor))) {
-                    isSouldValid = true;
-                    byteToLock = (soundOutput.runningSampleIndex * soundOutput.bytesPerSample) % soundOutput.secondaryBufferSize;
-
-                    targetCursor = (playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.secondaryBufferSize;
-                    if (byteToLock > targetCursor) {
-                        bytesToWrite = soundOutput.secondaryBufferSize - byteToLock;
-                        bytesToWrite += targetCursor;
-                    } else {
-                        bytesToWrite = targetCursor - byteToLock;
-                    }
-                }
-                var soundBuffer = handmade.game_sound_output_buffer{
-                    .samplesPerSecond = soundOutput.samplesPerSecond,
-                    .samplesCount = bytesToWrite / soundOutput.bytesPerSample,
-                    .samples = samples,
-                };
-
-                var gameOffscreenBuffer = handmade.game_offscreen_buffer{
-                    .memory = globalBackbuffer.memory,
-                    .height = globalBackbuffer.height,
-                    .width = globalBackbuffer.width,
-                    .pitch = globalBackbuffer.pitch,
-                };
-
-                handmade.GameUpdateAndRender(&gameOffscreenBuffer, &soundBuffer, newInput);
-                if (isSouldValid) {
-                    Win32FillSoundBuffer(
-                        &soundOutput,
-                        byteToLock,
-                        bytesToWrite,
-                        &soundBuffer,
-                    );
-                }
-
-                var deviceContext = win32.GetDC(windowHandle);
-                defer _ = win32.ReleaseDC(windowHandle, deviceContext);
-
-                const windowDimension = Win32WindowDimension.get(windowHandle);
-                if (deviceContext) |context| {
-                    Win32CopyBufferToWindow(
-                        &globalBackbuffer,
-                        context,
-                        windowDimension.width,
-                        windowDimension.height,
-                    );
-                }
-
-                // const endCycleCount = rdtsc();
-
-                // var endCounter: win32.LARGE_INTEGER = undefined;
-                // _ = win32.QueryPerformanceCounter(&endCounter);
-
-                // TODO(rosh): Display the value here
-                // const cyclesElapsed: u64 = endCycleCount - lastCycleCount;
-                // const counterElapsed: f64 = @floatFromInt(endCounter.QuadPart - lastCounter.QuadPart);
-                // const msPerFrame: f32 = @floatCast((1000 * counterElapsed) / @as(f64, @floatFromInt(perfCountFrequency)));
-                // const fps: f32 = @floatCast(@as(f64, @floatFromInt(perfCountFrequency)) / counterElapsed);
-                // const mcpf: f32 = @floatCast(@as(f64, @floatFromInt(cyclesElapsed)) / (1000 * 1000));
-
-                // std.debug.print("{d}ms/f, {d}fps, {d}mc/f\n", .{ msPerFrame, fps, mcpf });
-                // lastCounter = endCounter;
-                // lastCycleCount = endCycleCount;
-
-                const temp = newInput;
-                newInput = oldInput;
-                oldInput = temp;
-                // TODO(rosh): Should we clear these??
-            }
+                } else {}
+            } else {}
         } else {
             ProcessWindowsError();
             // TODO(rosh): Logging
