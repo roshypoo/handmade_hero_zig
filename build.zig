@@ -5,6 +5,9 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
+    const options = b.addOptions();
+    options.addOption(bool, "IGNORE", true);
+
     const win32 = b.addModule("win32", .{ .source_file = .{ .path = "lib/zigwin32/win32.zig" } });
 
     // const lib = b.addStaticLibrary(.{
@@ -23,6 +26,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.addModule("win32", win32);
+    exe.addOptions("build_consts", options);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

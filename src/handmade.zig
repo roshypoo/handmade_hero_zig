@@ -40,7 +40,7 @@ pub const game_controller_input = struct {
 
     endX: f32 = 0,
     endY: f32 = 0,
-    
+
     button: packed struct {
         up: game_button_state,
         down: game_button_state,
@@ -52,6 +52,14 @@ pub const game_controller_input = struct {
 };
 pub const game_input = struct {
     controllers: [4]game_controller_input,
+};
+
+pub const game_memory = struct {
+    isInitialized: bool = false,
+    permanentStorageSize: u64,
+    permanentStorage: [*]u8, //NOTE(rosh): REQUIRED to be cleared to zero.
+    transientStorageSize: u64,
+    transientStorage: [*]u8, //NOTE(rosh): REQUIRED to be cleared to zero.
 };
 
 var tSine: f32 = undefined;
@@ -93,29 +101,49 @@ fn RenderWeirdGradient(buffer: *game_offscreen_buffer, blueOffset: i32, greenOff
     }
 }
 
+const game_state = struct {
+    blueOffset: i32 = undefined,
+    greenOffset: i32 = undefined,
+    toneHz: u32 = undefined,
+};
 
-pub fn GameUpdateAndRender(buffer: *game_offscreen_buffer, soundbuffer: *game_sound_output_buffer, input: *game_input) void {
+pub fn GameUpdateAndRender(memory: *game_memory, buffer: *game_offscreen_buffer, soundbuffer: *game_sound_output_buffer, input: *game_input) void {
+   
+    std.debug.assert(@sizeOf(game_state) <= memory.permanentStorageSize);
     
-    const state = struct {
-        var blueOffset:i32 = 0;
-        var greenOffset:i32 = 0;
-        var toneHz:u32 = 256;
-    };
-    
+    var gameState: *game_state = @ptrCast(@alignCast(memory));
+    if (!memory.isInitialized) {
+        gameState.toneHz = 256;
+        memory.isInitialized = true;
+    }
+
     const input0: game_controller_input = input.controllers[0];
     if (input0.isAnalog) {
         //NOTE(rosh): Use analog movement tuning
-        state.blueOffset += @intFromFloat(4.0 * input0.endX);
+        gameState.blueOffset += @intFromFloat(4.0 * input0.endX);
         // state.toneHz += 256 + @as(u32, @intFromFloat(120.0 * input0.endY));
     } else {
         //NOTE(rosh): Use digital movement tuning
     }
 
     if (input0.button.down.endedDown != 0) {
-        state.greenOffset += 1;
+        gameState.greenOffset += 1;
     }
 
     //TODO(rosh): Allow sample offsets here for more robust platform options
-    GameOutputSound(soundbuffer, state.toneHz);
-    RenderWeirdGradient(buffer, state.blueOffset, state.greenOffset);
+    GameOutputSound(soundbuffer, gameState.toneHz);
+    RenderWeirdGradient(buffer, gameState.blueOffset, gameState.greenOffset);
+}
+
+pub inline fn Terabytes(value: u64) u64 {
+    return 1024 * Gigabytes(value);
+}
+pub inline fn Gigabytes(value: u64) u64 {
+    return 1024 * Megabytes(value);
+}
+pub inline fn Megabytes(value: u64) u64 {
+    return 1024 * Kilobytes(value);
+}
+pub inline fn Kilobytes(value: u64) u64 {
+    return 1024 * value;
 }
