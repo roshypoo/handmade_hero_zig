@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "IGNORE", true);
 
-    const win32 = b.addModule("win32", .{ .source_file = .{ .path = "lib/zigwin32/win32.zig" } });
+    const win32 = b.addModule("win32", .{ .root_source_file = .{ .path = "lib/zigwin32/win32.zig" } });
 
     // const lib = b.addStaticLibrary(.{
     //     .name = "handmade",
@@ -25,8 +25,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("win32", win32);
-    exe.addOptions("build_consts", options);
+    exe.root_module.addImport("win32", win32);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
