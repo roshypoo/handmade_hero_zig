@@ -10,9 +10,6 @@ const std = @import("std");
 const math = std.math;
 const HANDMADE_INTERNAL = (@import("builtin").mode == std.builtin.Mode.Debug);
 
-/// IMPORTANT(rosh): 
-/// They are NOT for doing anything in the shipping game - they are
-/// blocking and the write doesn't protect against lost data!
 pub const platform = struct {
     DEBUGPlatformReadEntireFile: fn ([*:0]const u8) debug_read_file_result = undefined,
     DEBUGPlatformFreeFileMemory: fn (*anyopaque) void = undefined,
