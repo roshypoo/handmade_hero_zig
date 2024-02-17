@@ -197,11 +197,11 @@ const win32Platform = handmade.platform{ .DEBUGPlatformFreeFileMemory = DEBUGPla
 fn DEBUGPlatformWriteEntireFile(fileName: [*:0]const u8, fileSize: u32, memory: *anyopaque) bool {
     const handle: HANDLE = win32.CreateFileA(
         fileName,
-        win32.FILE_ACCESS_FLAGS.initFlags(.{ .FILE_GENERIC_WRITE = 1 }),
-        win32.FILE_SHARE_MODE.initFlags(.{}),
+        win32.FILE_GENERIC_WRITE,
+        win32.FILE_SHARE_MODE{},
         null,
         win32.FILE_CREATION_DISPOSITION.CREATE_ALWAYS,
-        win32.FILE_FLAGS_AND_ATTRIBUTES.initFlags(.{}),
+        win32.FILE_FLAGS_AND_ATTRIBUTES{},
         null,
     );
     var result: bool = false;
@@ -230,11 +230,11 @@ fn DEBUGPlatformReadEntireFile(fileName: [*:0]const u8) handmade.debug_read_file
     var result = handmade.debug_read_file_result{};
     const handle: HANDLE = win32.CreateFileA(
         fileName,
-        win32.FILE_ACCESS_FLAGS.initFlags(.{ .FILE_GENERIC_READ = 1 }),
-        win32.FILE_SHARE_MODE.initFlags(.{ .READ = 1 }),
+        win32.FILE_GENERIC_READ,
+        win32.FILE_SHARE_MODE{ .READ = 1 },
         null,
         win32.FILE_CREATION_DISPOSITION.OPEN_EXISTING,
-        win32.FILE_FLAGS_AND_ATTRIBUTES.initFlags(.{}),
+        win32.FILE_FLAGS_AND_ATTRIBUTES{},
         null,
     );
     if (handle != win32.INVALID_HANDLE_VALUE) {
@@ -245,8 +245,8 @@ fn DEBUGPlatformReadEntireFile(fileName: [*:0]const u8) handmade.debug_read_file
             if (win32.VirtualAlloc(
                 null,
                 @intCast(fileSize.QuadPart),
-                win32.VIRTUAL_ALLOCATION_TYPE.initFlags(.{ .RESERVE = 1, .COMMIT = 1 }),
-                win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                win32.PAGE_READWRITE,
             )) |data| {
                 const fileSize32: u32 = @truncate(@as(u64, @bitCast(fileSize.QuadPart)));
                 var bytesToRead: u32 = 0;
@@ -413,11 +413,11 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
     Win32LoadXinput();
     Win32ResizeDIBSection(&globalBackbuffer, 1200, 720);
     const WindowClass = win32.WNDCLASS{
-        .style = win32.WNDCLASS_STYLES.initFlags(.{
+        .style = win32.WNDCLASS_STYLES{
             .HREDRAW = 1,
             .VREDRAW = 1,
             .OWNDC = 1,
-        }),
+        },
         .lpfnWndProc = WindowProc,
         .cbClsExtra = 0,
         .cbWndExtra = 0,
@@ -431,15 +431,14 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
 
     if (win32.RegisterClass(&WindowClass) > 0) {
         const windowHandle = win32.CreateWindowEx(
-            win32.WINDOW_EX_STYLE.initFlags(.{}),
+            win32.WINDOW_EX_STYLE{},
             WindowClass.lpszClassName,
             win32.L("Handmade Hero"),
-            win32.WINDOW_STYLE.initFlags(.{
-                .OVERLAPPED = 1,
+            win32.WINDOW_STYLE{
                 .VISIBLE = 1,
                 .SYSMENU = 1,
                 .THICKFRAME = 1,
-            }),
+            },
             win32.CW_USEDEFAULT,
             win32.CW_USEDEFAULT,
             win32.CW_USEDEFAULT,
@@ -481,14 +480,14 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             if (@as(?[*]i16, @ptrCast(@alignCast(win32.VirtualAlloc(
                 null,
                 soundOutput.secondaryBufferSize,
-                win32.VIRTUAL_ALLOCATION_TYPE.initFlags(.{ .RESERVE = 1, .COMMIT = 1 }),
-                win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+                win32.VIRTUAL_ALLOCATION_TYPE { .RESERVE = 1, .COMMIT = 1 },
+                win32.PAGE_READWRITE,
             ))))) |samples| {
                 if (@as(?[*]u8, @ptrCast(@alignCast(win32.VirtualAlloc(
                     null,
                     totalSize,
-                    win32.VIRTUAL_ALLOCATION_TYPE.initFlags(.{ .RESERVE = 1, .COMMIT = 1 }),
-                    win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+                    win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+                    win32.PAGE_READWRITE,
                 ))))) |memory| {
                     var gameMemory = handmade.game_memory{ .permanentStorageSize = gameMemoryStorageSize, .permanentStorage = memory, .transientStorageSize = transientMemoryStorageSize, .transientStorage = memory + gameMemoryStorageSize };
 
@@ -522,7 +521,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                             null,
                             0,
                             0,
-                            win32.PEEK_MESSAGE_REMOVE_TYPE.initFlags(.{ .REMOVE = 1 }),
+                            win32.PEEK_MESSAGE_REMOVE_TYPE{ .REMOVE = 1 },
                         ) > 0) {
                             if (message.message == win32.WM_QUIT) {
                                 running = false;
@@ -847,8 +846,8 @@ fn Win32ResizeDIBSection(buffer: *Win32OffScreenBuffer, width: i32, height: i32)
     buffer.memory = win32.VirtualAlloc(
         null,
         bitmapMemorySize,
-        win32.VIRTUAL_ALLOCATION_TYPE.initFlags(.{ .RESERVE = 1, .COMMIT = 1 }),
-        win32.PAGE_PROTECTION_FLAGS.PAGE_READWRITE,
+        win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
+        win32.PAGE_READWRITE,
     );
     buffer.pitch = @intCast((buffer.bytesPerPixel * width));
 }
