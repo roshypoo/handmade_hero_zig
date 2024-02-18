@@ -263,7 +263,7 @@ fn DEBUGPlatformReadEntireFile(fileName: [*:0]const u8) handmade.debug_read_file
                 } else {
                     //TODO(rosh): Logging
                     DEBUGPlatformFreeFileMemory(result.contents);
-                    result.contentSize  = 0;
+                    result.contentSize = 0;
                     result.contents = null;
                 }
             } else {
@@ -405,6 +405,11 @@ fn Win32ProcessDigitalXinputButton(xInputButtonState: u32, newState: *handmade.g
     newState.endedDown = if ((xInputButtonState & buttonBit) == buttonBit) 1 else 0;
 }
 
+fn Win32ProcessKeyboardMessage(newState: *handmade.game_button_state, isDown: u32) void {
+    newState.halfTransitionCount += 1;
+    newState.endedDown = isDown;
+}
+
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32) callconv(WINAPI) c_int {
     // var perfCountFrequencyResult: win32.LARGE_INTEGER = undefined;
     // _ = win32.QueryPerformanceFrequency(&perfCountFrequencyResult);
@@ -480,7 +485,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
             if (@as(?[*]i16, @ptrCast(@alignCast(win32.VirtualAlloc(
                 null,
                 soundOutput.secondaryBufferSize,
-                win32.VIRTUAL_ALLOCATION_TYPE { .RESERVE = 1, .COMMIT = 1 },
+                win32.VIRTUAL_ALLOCATION_TYPE{ .RESERVE = 1, .COMMIT = 1 },
                 win32.PAGE_READWRITE,
             ))))) |samples| {
                 if (@as(?[*]u8, @ptrCast(@alignCast(win32.VirtualAlloc(
@@ -495,7 +500,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                         handmade.game_input{
                             .controllers = [1]handmade.game_controller_input{
                                 handmade.game_controller_input{
-                                    .button = .{
+                                    .buttons = .{
                                         .up = handmade.game_button_state{},
                                         .down = handmade.game_button_state{},
                                         .left = handmade.game_button_state{},
@@ -515,20 +520,17 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                     // var lastCycleCount: u64 = rdtsc();
                     running = true;
                     while (running) {
-                        var message: win32.MSG = undefined;
-                        while (win32.PeekMessage(
-                            &message,
-                            null,
-                            0,
-                            0,
-                            win32.PEEK_MESSAGE_REMOVE_TYPE{ .REMOVE = 1 },
-                        ) > 0) {
-                            if (message.message == win32.WM_QUIT) {
-                                running = false;
-                            }
-                            _ = win32.TranslateMessage(&message);
-                            _ = win32.DispatchMessage(&message);
-                        }
+                        const keyboard_controller: *handmade.game_controller_input = &newInput.controllers[0];
+
+                        keyboard_controller.* = handmade.game_controller_input{ .buttons = .{
+                            .up = handmade.game_button_state{},
+                            .down = handmade.game_button_state{},
+                            .left = handmade.game_button_state{},
+                            .right = handmade.game_button_state{},
+                            .leftShoulder = handmade.game_button_state{},
+                            .rightShoulder = handmade.game_button_state{},
+                        } };
+                        Win32ProcessPendingMessages(keyboard_controller);
 
                         var controllerIndex: u32 = 0;
                         var maxControllerCount = win32.XUSER_MAX_COUNT;
@@ -577,39 +579,39 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                                 // XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE
                                 Win32ProcessDigitalXinputButton(
                                     pad.wButtons,
-                                    @ptrCast(&newController.button.down),
+                                    @ptrCast(&newController.buttons.down),
                                     win32.XINPUT_GAMEPAD_A,
-                                    @ptrCast(&oldController.button.down),
+                                    @ptrCast(&oldController.buttons.down),
                                 );
                                 Win32ProcessDigitalXinputButton(
                                     pad.wButtons,
-                                    @ptrCast(&newController.button.right),
+                                    @ptrCast(&newController.buttons.right),
                                     win32.XINPUT_GAMEPAD_B,
-                                    @ptrCast(&oldController.button.right),
+                                    @ptrCast(&oldController.buttons.right),
                                 );
                                 Win32ProcessDigitalXinputButton(
                                     pad.wButtons,
-                                    @ptrCast(&newController.button.left),
+                                    @ptrCast(&newController.buttons.left),
                                     win32.XINPUT_GAMEPAD_X,
-                                    @ptrCast(&oldController.button.left),
+                                    @ptrCast(&oldController.buttons.left),
                                 );
                                 Win32ProcessDigitalXinputButton(
                                     pad.wButtons,
-                                    @ptrCast(&newController.button.leftShoulder),
+                                    @ptrCast(&newController.buttons.leftShoulder),
                                     win32.XINPUT_GAMEPAD_LEFT_SHOULDER,
-                                    @ptrCast(&oldController.button.leftShoulder),
+                                    @ptrCast(&oldController.buttons.leftShoulder),
                                 );
                                 Win32ProcessDigitalXinputButton(
                                     pad.wButtons,
-                                    @ptrCast(&newController.button.rightShoulder),
+                                    @ptrCast(&newController.buttons.rightShoulder),
                                     win32.XINPUT_GAMEPAD_RIGHT_SHOULDER,
-                                    @ptrCast(&oldController.button.rightShoulder),
+                                    @ptrCast(&oldController.buttons.rightShoulder),
                                 );
                                 Win32ProcessDigitalXinputButton(
                                     pad.wButtons,
-                                    @ptrCast(&newController.button.up),
+                                    @ptrCast(&newController.buttons.up),
                                     win32.XINPUT_GAMEPAD_Y,
-                                    @ptrCast(&oldController.button.up),
+                                    @ptrCast(&oldController.buttons.up),
                                 );
                             }
                         }
@@ -705,6 +707,93 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
     return 0;
 }
 
+fn Win32ProcessPendingMessages(keyboard_controller: *handmade.game_controller_input) void {
+    var message: win32.MSG = undefined;
+    while (win32.PeekMessage(
+        &message,
+        null,
+        0,
+        0,
+        win32.PEEK_MESSAGE_REMOVE_TYPE{ .REMOVE = 1 },
+    ) > 0) {
+        switch (message.message) {
+            win32.WM_QUIT => {
+                running = false;
+            },
+            win32.WM_SYSKEYDOWN, win32.WM_SYSKEYUP, win32.WM_KEYUP, win32.WM_KEYDOWN => {
+                const vKCode: u32 = @intCast(message.wParam);
+                const wasDown: bool = (message.lParam & (1 << 30) != 0);
+                const isDown: bool = (message.lParam & (1 << 31) == 0);
+                if (wasDown != isDown) {
+                    switch (vKCode) {
+                        'W' => {},
+                        'A' => {},
+                        'S' => {},
+                        'D' => {},
+                        'Q' => {
+                            Win32ProcessKeyboardMessage(
+                                &keyboard_controller.buttons.leftShoulder,
+                                @intFromBool(isDown),
+                            );
+                        },
+                        'E' => {
+                            Win32ProcessKeyboardMessage(
+                                &keyboard_controller.buttons.rightShoulder,
+                                @intFromBool(isDown),
+                            );
+                        },
+                        @intFromEnum(win32.VK_UP) => {
+                            Win32ProcessKeyboardMessage(
+                                &keyboard_controller.buttons.up,
+                                @intFromBool(isDown),
+                            );
+                        },
+                        @intFromEnum(win32.VK_LEFT) => {
+                            Win32ProcessKeyboardMessage(
+                                &keyboard_controller.buttons.left,
+                                @intFromBool(isDown),
+                            );
+                        },
+                        @intFromEnum(win32.VK_DOWN) => {
+                            Win32ProcessKeyboardMessage(
+                                &keyboard_controller.buttons.down,
+                                @intFromBool(isDown),
+                            );
+                        },
+                        @intFromEnum(win32.VK_RIGHT) => {
+                            Win32ProcessKeyboardMessage(
+                                &keyboard_controller.buttons.right,
+                                @intFromBool(isDown),
+                            );
+                        },
+                        @intFromEnum(win32.VK_ESCAPE) => {
+                            win32.OutputDebugStringA("Escape Key: ");
+                            if (isDown) {
+                                win32.OutputDebugStringA("isDown\n");
+                            }
+                            if (wasDown) {
+                                win32.OutputDebugStringA("wasDown\n");
+                            }
+                        },
+                        @intFromEnum(win32.VK_SPACE) => {},
+                        @intFromEnum(win32.VK_F4) => {
+                            const isAltKeyDown = message.lParam & (1 << 29) != 0;
+                            if (isAltKeyDown) {
+                                running = false;
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {
+                _ = win32.TranslateMessage(&message);
+                _ = win32.DispatchMessage(&message);
+            },
+        }
+    }
+}
+
 fn WindowProc(
     windowHandle: HWND,
     message: u32,
@@ -728,42 +817,7 @@ fn WindowProc(
         win32.WM_ACTIVATEAPP => {
             win32.OutputDebugStringA("WM_ACTIVATE_APP\n");
         },
-        win32.WM_SYSKEYDOWN, win32.WM_SYSKEYUP, win32.WM_KEYUP, win32.WM_KEYDOWN => {
-            const vKCode: u32 = @intCast(wParam);
-            const wasDown: bool = (lParam & (1 << 30) != 0);
-            const isDown: bool = (lParam & (1 << 31) == 0);
-            if (wasDown != isDown) {
-                switch (vKCode) {
-                    'W' => {},
-                    'A' => {},
-                    'S' => {},
-                    'D' => {},
-                    'Q' => {},
-                    'E' => {},
-                    @intFromEnum(win32.VK_UP) => {},
-                    @intFromEnum(win32.VK_LEFT) => {},
-                    @intFromEnum(win32.VK_DOWN) => {},
-                    @intFromEnum(win32.VK_RIGHT) => {},
-                    @intFromEnum(win32.VK_ESCAPE) => {
-                        win32.OutputDebugStringA("Escape Key: ");
-                        if (isDown) {
-                            win32.OutputDebugStringA("isDown\n");
-                        }
-                        if (wasDown) {
-                            win32.OutputDebugStringA("wasDown\n");
-                        }
-                    },
-                    @intFromEnum(win32.VK_SPACE) => {},
-                    @intFromEnum(win32.VK_F4) => {
-                        const isAltKeyDown = lParam & (1 << 29) != 0;
-                        if (isAltKeyDown) {
-                            running = false;
-                        }
-                    },
-                    else => {},
-                }
-            }
-        },
+
         win32.WM_PAINT => {
             var paint: win32.PAINTSTRUCT = undefined;
             const deviceContext = win32.BeginPaint(windowHandle, &paint);

@@ -10,7 +10,7 @@ const std = @import("std");
 const math = std.math;
 const HANDMADE_INTERNAL = (@import("builtin").mode == std.builtin.Mode.Debug);
 
-/// IMPORTANT(rosh): 
+/// IMPORTANT(rosh):
 /// They are NOT for doing anything in the shipping game - they are
 /// blocking and the write doesn't protect against lost data!
 pub const platform = struct {
@@ -54,7 +54,7 @@ pub const game_controller_input = struct {
     endX: f32 = 0,
     endY: f32 = 0,
 
-    button: packed struct {
+    buttons: packed struct {
         up: game_button_state,
         down: game_button_state,
         left: game_button_state,
@@ -125,8 +125,8 @@ pub fn GameUpdateAndRender(callbacks: *const platform, memory: *game_memory, buf
     if (!memory.isInitialized) {
         const fileName = "src/handmade.zig";
         const file = callbacks.DEBUGPlatformReadEntireFile(fileName);
-        if (file.contents) |content|{
-           if (callbacks.DEBUGPlatformWriteEntireFile(
+        if (file.contents) |content| {
+            if (callbacks.DEBUGPlatformWriteEntireFile(
                 "data/test.out",
                 file.contentSize,
                 content,
@@ -151,7 +151,7 @@ pub fn GameUpdateAndRender(callbacks: *const platform, memory: *game_memory, buf
         //NOTE(rosh): Use digital movement tuning
     }
 
-    if (input0.button.down.endedDown != 0) {
+    if (input0.buttons.down.endedDown != 0) {
         gameState.greenOffset += 1;
     }
 
