@@ -41,30 +41,45 @@ pub const game_button_state = packed struct {
 };
 pub const game_controller_input = struct {
     isAnalog: bool = false,
-
-    startX: f32 = 0,
-    startY: f32 = 0,
-
-    minX: f32 = 0,
-    minY: f32 = 0,
-
-    maxX: f32 = 0,
-    maxY: f32 = 0,
-
-    endX: f32 = 0,
-    endY: f32 = 0,
+    isConnected: bool = false,
+    stickAverageX: f32 = 0,
+    stickAverageY: f32 = 0,
 
     buttons: packed struct {
-        up: game_button_state,
-        down: game_button_state,
-        left: game_button_state,
-        right: game_button_state,
+        moveUp: game_button_state,
+        moveDown: game_button_state,
+        moveLeft: game_button_state,
+        moveRight: game_button_state,
+        actionUp: game_button_state,
+        actionDown: game_button_state,
+        actionLeft: game_button_state,
+        actionRight: game_button_state,
         leftShoulder: game_button_state,
         rightShoulder: game_button_state,
+        back: game_button_state,
+        start: game_button_state,
     },
+
+    pub fn Get(self: *game_controller_input, index: u8) *game_button_state {
+        return switch (index) {
+            0 => &self.buttons.moveUp,
+            1 => &self.buttons.moveDown,
+            2 => &self.buttons.moveLeft,
+            3 => &self.buttons.moveRight,
+            4 => &self.buttons.actionUp,
+            5 => &self.buttons.actionDown,
+            6 => &self.buttons.actionLeft,
+            7 => &self.buttons.actionRight,
+            8 => &self.buttons.leftShoulder,
+            9 => &self.buttons.rightShoulder,
+            10 => &self.buttons.back,
+            11 => &self.buttons.start,
+            else => unreachable,
+        };
+    }
 };
 pub const game_input = struct {
-    controllers: [4]game_controller_input,
+    controllers: [5]game_controller_input,
 };
 
 pub const game_memory = struct {
@@ -142,17 +157,23 @@ pub fn GameUpdateAndRender(callbacks: *const platform, memory: *game_memory, buf
         memory.isInitialized = true;
     }
 
-    const input0: game_controller_input = input.controllers[0];
-    if (input0.isAnalog) {
-        //NOTE(rosh): Use analog movement tuning
-        gameState.blueOffset += @intFromFloat(4.0 * input0.endX);
-        // state.toneHz += 256 + @as(u32, @intFromFloat(120.0 * input0.endY));
-    } else {
-        //NOTE(rosh): Use digital movement tuning
-    }
+    for (input.controllers) |controller| {
+        if (controller.isAnalog) {
+            //NOTE(rosh): Use analog movement tuning
+            gameState.blueOffset += @intFromFloat(4.0 * controller.stickAverageX);
+            // gameState.toneHz += 256 + @as(u32, @intFromFloat(120.0 * controller.stickAverageY));
+        } else {
+            if (controller.buttons.moveLeft.endedDown != 0) {
+                gameState.blueOffset -= 1;
+            } else if (controller.buttons.moveRight.endedDown != 0) {
+                gameState.blueOffset += 1;
+            }
+            //NOTE(rosh): Use digital movement tuning
+        }
 
-    if (input0.buttons.down.endedDown != 0) {
-        gameState.greenOffset += 1;
+        if (controller.buttons.actionDown.endedDown != 0) {
+            gameState.greenOffset += 1;
+        }
     }
 
     //TODO(rosh): Allow sample offsets here for more robust platform options
