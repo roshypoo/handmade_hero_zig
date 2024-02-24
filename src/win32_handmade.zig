@@ -402,9 +402,9 @@ fn Win32FillSoundBuffer(
 fn Win32ProcessXInputStickValue(value: i16, deadZoneThreshold: i16) f32 {
     var result: f32 = 0;
     if (value < -deadZoneThreshold) {
-        result = @as(f32, @floatFromInt(value + deadZoneThreshold)) / (32768.0 - deadZoneThreshold);
+        result = @as(f32, @floatFromInt(value + deadZoneThreshold)) / (32768.0 - @as(f32, @floatFromInt(deadZoneThreshold)));
     } else if (value > deadZoneThreshold) {
-        result = @as(f32, @floatFromInt(value - deadZoneThreshold)) / (32767.0 - deadZoneThreshold);
+        result = @as(f32, @floatFromInt(value - deadZoneThreshold)) / (32767.0 - @as(f32, @floatFromInt(deadZoneThreshold)));
     }
     return result;
 }
@@ -587,9 +587,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, _: [*:0]u16, _: u32)
                                     win32.XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
                                 );
 
-                                if ((newController.stickAverageX != 0) ||
-                                    (newController.stickAverageY != 0))
-                                {
+                                if ((newController.stickAverageX != 0) or (newController.stickAverageY != 0)) {
                                     newController.isAnalog = true;
                                 }
                                 if ((pad.wButtons & win32.XINPUT_GAMEPAD_DPAD_UP) != 0) {
