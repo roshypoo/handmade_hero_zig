@@ -7,21 +7,13 @@ pub fn build(b: *std.Build) void {
 
     const options = b.addOptions();
     options.addOption(bool, "IGNORE", true);
-
-    const win32 = b.addModule("win32", .{ .root_source_file = .{ .path = "lib/zigwin32/win32.zig" } });
-
-    // const lib = b.addStaticLibrary(.{
-    //     .name = "handmade",
-    //     .root_source_file = .{ .path = "src/main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // lib.addModule("win32", win32);
-    // b.installArtifact(lib);
+    const win32 = b.addModule("win32", .{ 
+        .root_source_file =  b.path("lib/zigwin32/win32.zig"),
+    });
 
     const exe = b.addExecutable(.{
         .name = "handmade",
-        .root_source_file = .{ .path = "src/win32_handmade.zig" },
+        .root_source_file = b.path("src/win32_handmade.zig"),
         .target = target,
         .optimize = optimize,
     });
